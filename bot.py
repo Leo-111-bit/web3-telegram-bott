@@ -6,8 +6,9 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from google import genai
 from google.genai import types as genai_types
+from aiohttp import web
 
-# Render will read your tokens securely from its dashboard using these lines
+# Secure environment variables for Render hosting
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -61,8 +62,25 @@ async def handle_incoming_messages(message: types.Message):
         logging.error(f"Error handling Gemini API request: {e}")
         await message.reply("Sorry, the AI network is currently busy or encountered an error. Please try asking your question again in a moment!")
 
+# Fake web server handler to satisfy Render's port requirements
+async def handle_render_health_check(request):
+    return web.Response(text="Bot is running smoothly!")
+
 async def main():
     logging.info("Starting Web3 Standalone AI Bot...")
+    
+    # Setup dummy web server on the port Render assigns us
+    app = web.Application()
+    app.router.add_get('/', handle_render_health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    asyncio.create_task(site.start())
+    logging.info(f"Dummy web server started on port {port}")
+    
+    # Start Telegram Polling
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
