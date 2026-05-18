@@ -4,18 +4,26 @@ import sys
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-from google import genai
-from google.genai import types as genai_types
+from groq import Groq
 from aiohttp import web
 
 # Secure environment variables for Render hosting
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
+# Safety check: Prevent startup crash if keys are missing
+if not TELEGRAM_BOT_TOKEN:
+    logging.error("CRITICAL ERROR: TELEGRAM_BOT_TOKEN is missing or improperly named in Render settings.")
+    sys.exit(1)
+if not GROQ_API_KEY:
+    logging.error("CRITICAL ERROR: GROQ_API_KEY is missing or improperly named in Render settings.")
+    sys.exit(1)
+
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 SYSTEM_INSTRUCTION = """
 You are a standalone, elite Web3 AI Assistant. 
@@ -44,30 +52,33 @@ async def handle_incoming_messages(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     try:
-        response = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=message.text,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.7,
-            ),
+        # Using the absolute latest, super-fast Llama 3.3 model on Groq
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": message.text}
+            ],
+            temperature=0.7,
         )
         
-        if response.text:
-            await message.reply(response.text, parse_mode=None)
+        reply_text = response.choices[0].message.content
+        
+        if reply_text:
+            await message.reply(reply_text, parse_mode=None)
         else:
             await message.reply("I processed your request but couldn't generate an answer.")
             
     except Exception as e:
-        logging.error(f"Error handling Gemini API request: {e}")
-        await message.reply("Sorry, the AI network is currently busy or encountered an error. Please try asking your question again in a moment!")
+        logging.error(f"Error handling Groq API request: {e}")
+        await message.reply("Sorry, the AI network encountered an error. Please try asking again!")
 
 # Fake web server handler to satisfy Render's port requirements
 async def handle_render_health_check(request):
     return web.Response(text="Bot is running smoothly!")
 
 async def main():
-    logging.info("Starting Web3 Standalone AI Bot...")
+    logging.info("Starting Web3 Standalone AI Bot on Groq Engine...")
     
     # Setup dummy web server on the port Render assigns us
     app = web.Application()
