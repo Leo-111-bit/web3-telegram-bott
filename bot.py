@@ -2,9 +2,9 @@ import os
 import sys
 import logging
 import asyncio
-import aiohttp
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from groq import Groq
 
 # 1. Environment Config Validation
@@ -22,6 +22,10 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 groq_client = Groq(api_key=GROQ_API_KEY)
 
+# A simple in-memory storage dictionary to map Telegram usernames to their chat IDs
+# To work, users must have interacted with the bot at least once so it captures their ID
+user_registry = {}
+
 SYSTEM_INSTRUCTION = """
 You are King Leo, an elite, highly knowledgeable AI Assistant. 
 You can answer questions about any topic in the world, handle general knowledge, or engage in friendly, non-explicit banter.
@@ -35,12 +39,50 @@ Rules:
 # 3. Message Handlers
 @dp.message(CommandStart())
 async def handle_start_command(message: types.Message):
+    # Track user ID when they interact privately or join
+    if message.from_user.username:
+        user_registry[f"@{message.from_user.username.lower()}"] = message.from_user.id
+    
     await message.reply("Welcome to Web3 Brain AI!\n\nI am King Leo, your elite AI assistant. Ask me anything! KINGLEO BOT")
+
+@dp.message(Command("pm"))
+async def handle_private_message_command(message: types.Message):
+    """
+    Usage in group or private: /pm @username Your secret message here
+    """
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.reply("Usage format: /pm @username Your message text KINGLEO BOT")
+        return
+
+    target_username = args[1].lower()
+    text_to_send = args[2]
+
+    # Look up the internal Telegram chat ID from our active user tracking list
+    target_chat_id = user_registry.get(target_username)
+
+    if not target_chat_id:
+        await message.reply(
+            f"Cannot send message to {args[1]}. "
+            f"The user must open a private DM and click /start with me first so I can capture their ID! KINGLEO BOT"
+        )
+        return
+
+    try:
+        await bot.send_message(chat_id=target_chat_id, text=f"{text_to_send}\n\n[Direct Admin PM] KINGLEO BOT")
+        await message.reply(f"Successfully sent private message to {args[1]}! KINGLEO BOT")
+    except Exception as e:
+        logging.error(f"Failed to send direct message: {e}")
+        await message.reply(f"Failed to DM user. They might have blocked the bot. KINGLEO BOT")
 
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text:
         return
+
+    # Track username mappings dynamically as people talk in the group chat
+    if message.from_user.username:
+        user_registry[f"@{message.from_user.username.lower()}"] = message.from_user.id
 
     bot_info = await bot.get_me()
     bot_username = f"@{bot_info.username}"
@@ -75,28 +117,29 @@ async def handle_incoming_messages(message: types.Message):
             logging.error(f"Groq API Error: {e}")
             await message.reply("Sorry, I encountered a network error. Please try again! KINGLEO BOT")
 
-# 4. Anti-Sleep Keep Alive Engine
-async def keep_alive():
-    """This background loop running inside the container tricks Render so it never idles out."""
-    while True:
-        try:
-            logging.info("KingLeo Engine Heartbeat: Keeping instance hot and active...")
-            # We just do a minor async sleep block, keeping the event loop spinning
-            await asyncio.sleep(300) # Every 5 minutes
-        except Exception as e:
-            logging.error(f"Keep alive error: {e}")
-            await asyncio.sleep(60)
+# 4. Dummy Web Server to stop Render from killing the bot
+async def home_page(request):
+    return web.Response(text="KingLeo Engine is Online and Running Fine!")
 
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", home_page)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Render dummy port listener active on port {port}")
+
+# 5. Main Execution Loop
 async def main():
-    # Clean up any stuck webhooks from old deploys first
-    logging.info("Clearing old webhook hooks from Telegram servers...")
+    logging.info("Clearing old webhook hooks from Telegram...")
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Start the keep-alive background task
-    asyncio.create_task(keep_alive())
+    await start_web_server()
     
-    # Start permanent polling
-    logging.info("KingLeo Polling Engine Live and Locked.")
+    logging.info("KingLeo Polling Engine is now fully live!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
