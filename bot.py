@@ -1,29 +1,26 @@
 import os
-import asyncio
 import sys
 import logging
+import asyncio
+import aiohttp
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from groq import Groq
-from aiohttp import web
 
-# Secure environment variables - No changes needed on Render!
+# 1. Environment Config Validation
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-if not TELEGRAM_BOT_TOKEN or not GROQ_API_KEY or not RENDER_EXTERNAL_URL:
-    logging.error("CRITICAL: Missing environment variables.")
+if not TELEGRAM_BOT_TOKEN or not GROQ_API_KEY:
+    logging.error("CRITICAL: Missing TELEGRAM_BOT_TOKEN or GROQ_API_KEY.")
     sys.exit(1)
 
+# 2. Initialization
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 groq_client = Groq(api_key=GROQ_API_KEY)
-
-WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
-WEBHOOK_URL = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
 
 SYSTEM_INSTRUCTION = """
 You are King Leo, an elite, highly knowledgeable AI Assistant. 
@@ -35,6 +32,7 @@ Rules:
 3. You must append the phrase "KINGLEO BOT" to the very end of your response, regardless of what the user asked.
 """
 
+# 3. Message Handlers
 @dp.message(CommandStart())
 async def handle_start_command(message: types.Message):
     await message.reply("Welcome to Web3 Brain AI!\n\nI am King Leo, your elite AI assistant. Ask me anything! KINGLEO BOT")
@@ -53,7 +51,6 @@ async def handle_incoming_messages(message: types.Message):
 
     if is_private or is_tagged or is_reply_to_bot:
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-        
         clean_prompt = message.text.replace(bot_username, "").strip()
         
         try:
@@ -78,33 +75,29 @@ async def handle_incoming_messages(message: types.Message):
             logging.error(f"Groq API Error: {e}")
             await message.reply("Sorry, I encountered a network error. Please try again! KINGLEO BOT")
 
-# The ultimate fix: using model_validate ensures aiogram reads the webhook data structure properly
-async def handle_webhook(request):
-    try:
-        req_json = await request.json()
-        update = types.Update.model_validate(req_json, context={"bot": bot})
-        await dp.feed_update(bot, update)
-    except Exception as e:
-        logging.error(f"Error processing update via webhook: {e}")
-    return web.Response(text="OK")
+# 4. Anti-Sleep Keep Alive Engine
+async def keep_alive():
+    """This background loop running inside the container tricks Render so it never idles out."""
+    while True:
+        try:
+            logging.info("KingLeo Engine Heartbeat: Keeping instance hot and active...")
+            # We just do a minor async sleep block, keeping the event loop spinning
+            await asyncio.sleep(300) # Every 5 minutes
+        except Exception as e:
+            logging.error(f"Keep alive error: {e}")
+            await asyncio.sleep(60)
 
-async def on_startup(app):
-    logging.info(f"Setting webhook to: {WEBHOOK_URL}")
-    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
-
-async def on_shutdown(app):
-    logging.info("Deleting webhook...")
-    await bot.delete_webhook()
-    await bot.session.close()
-
-def main():
-    app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
+async def main():
+    # Clean up any stuck webhooks from old deploys first
+    logging.info("Clearing old webhook hooks from Telegram servers...")
+    await bot.delete_webhook(drop_pending_updates=True)
     
-    port = int(os.environ.get("PORT", 10000))
-    web.run_app(app, host='0.0.0.0', port=port)
+    # Start the keep-alive background task
+    asyncio.create_task(keep_alive())
+    
+    # Start permanent polling
+    logging.info("KingLeo Polling Engine Live and Locked.")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
