@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart
 from groq import Groq
 from aiohttp import web
 
-# Secure environment variables
+# Secure environment variables - No changes needed here!
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -25,7 +25,6 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
 WEBHOOK_URL = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
 
-# Clear instructions with the new simple signature requirement
 SYSTEM_INSTRUCTION = """
 You are King Leo, an elite, highly knowledgeable AI Assistant. 
 You can answer questions about any topic in the world, handle general knowledge, or engage in friendly, non-explicit banter.
@@ -38,30 +37,29 @@ Rules:
 
 @dp.message(CommandStart())
 async def handle_start_command(message: types.Message):
-    if message.chat.type == "private":
-        await message.answer(
-            "Welcome to Web3 Brain AI!\n\n"
-            "I am King Leo, your elite AI assistant. Ask me anything! KINGLEO BOT"
-        )
+    # This ensures the /start command replies gracefully in both DMs and groups
+    await message.reply("Welcome to Web3 Brain AI!\n\nI am King Leo, your elite AI assistant. Ask me anything! KINGLEO BOT")
 
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
+    # Ignore empty messages or media updates without text
     if not message.text:
         return
 
+    # Fetch the bot's username dynamically
     bot_info = await bot.get_me()
     bot_username = f"@{bot_info.username}"
     
+    # Core routing logic checks
     is_private = message.chat.type == "private"
     is_tagged = bot_username in message.text
     is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
 
-    # Respond in DMs, group tags, or direct replies in groups
+    # The bot triggers if it's a DM, if it's tagged in a group, or if someone replies to it in a group
     if is_private or is_tagged or is_reply_to_bot:
-        
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
         
-        # Clean the username tag out of the message text
+        # Strip the bot's tag out of the text so it does not confuse the AI prompt
         clean_prompt = message.text.replace(bot_username, "").strip()
         
         try:
@@ -75,26 +73,28 @@ async def handle_incoming_messages(message: types.Message):
             )
             
             reply_text = response.choices[0].message.content
-            
             if reply_text:
                 reply_text = reply_text.strip()
                 
-                # Enforce the new signature ending cleanly
+                # Rigid enforcement of the signature ending
                 if not reply_text.endswith("KINGLEO BOT"):
                     reply_text += " KINGLEO BOT"
                     
+                # Always use direct reply to anchor the conversation cleanly
                 await message.reply(reply_text, parse_mode=None)
                 
         except Exception as e:
             logging.error(f"Groq API Error: {e}")
             await message.reply("Sorry, I encountered a network error. Please try again! KINGLEO BOT")
 
+# Secure, direct JSON payload intake for Render Webhooks
 async def handle_webhook(request):
     try:
-        bot_update = types.Update.model_validate(await request.json(), context={"bot": bot})
-        await dp.feed_update(bot, bot_update)
+        req_json = await request.json()
+        update = types.Update(**req_json)
+        await dp.feed_update(bot, update)
     except Exception as e:
-        logging.error(f"Error processing update: {e}")
+        logging.error(f"Error processing update via webhook: {e}")
     return web.Response(text="OK")
 
 async def on_startup(app):
