@@ -10,24 +10,29 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from groq import Groq
 
 # 1. Environment Config Validation
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-if not TELEGRAM_BOT_TOKEN:
-    logging.error("CRITICAL: Missing TELEGRAM_BOT_TOKEN environment variable.")
+if not TELEGRAM_BOT_TOKEN or not GROQ_API_KEY:
+    logging.error("CRITICAL: Missing TELEGRAM_BOT_TOKEN or GROQ_API_KEY.")
     sys.exit(1)
 
 # 2. Initialization
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 # Active In-Memory Database Engine
 user_registry = {}
 xp_database = {}  
+
+SYSTEM_INSTRUCTION = "You are an elite, highly knowledgeable AI Assistant. Detect and adapt automatically to whatever language the user speaks and reply natively."
 
 def get_or_create_user(user: types.User):
     user_id = str(user.id)
@@ -114,10 +119,12 @@ async def handle_gift_command(message: types.Message):
     xp_database[str(target_id)]["xp"] += amount
     await message.reply(f"🎁 **PD CARD BONUS GRANTED**\n\n{target_handle} has been awarded `{amount} XP` by the administration!", parse_mode="Markdown")
 
-# Universal Dynamic Messaging Engine (Handles Tagging + Restores PM Integrity)
+# Universal Dynamic Messaging Engine (Repairs Group Tracking, Tag Actions, and Private DM AI Responses)
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text: return
+    
+    # Track activity and log XP for all human messages regardless of chat location
     log_user_activity(message.from_user)
 
     bot_info = await bot.get_me()
@@ -125,8 +132,8 @@ async def handle_incoming_messages(message: types.Message):
     is_private = message.chat.type == "private"
     is_tagged = bot_username in message.text
 
-    # Action Matrix 1: If tagged inside group chats
-    if is_tagged and not is_private:
+    # Scenario A: The bot is specifically tagged inside a public group chat
+    if not is_private and is_tagged:
         price_val, change_val = await fetch_xrp_price()
         app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
         
@@ -144,21 +151,33 @@ async def handle_incoming_messages(message: types.Message):
         await message.reply(tag_response, reply_markup=kb, parse_mode="Markdown")
         return
 
-    # Action Matrix 2: Direct Fallback Chat Response for Private DMs
+    # Scenario B: Direct Private Message — Unleashes General AI Knowledge
     if is_private:
-        price_val, change_val = await fetch_xrp_price()
-        app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ LAUNCH PD CARD APP ⚡", web_app=WebAppInfo(url=app_url))]
-        ])
-        pm_response = (
-            f"🐼 **PD CARD AUTOMATED INTERACTIVE SYSTEM** 🐼\n\n"
-            f" Live Core Metrics:\n"
-            f"• XRP Tracker Status: Online\n"
-            f"• Current XRP Value: `{price_val}` ({change_val})\n\n"
-            f"How can we guide you today? Launch the premium 3D application suite below to check out the leaderboards!"
-        )
-        await message.reply(pm_response, reply_markup=kb, parse_mode="Markdown")
+        # Prevent processing command paths as raw text prompts
+        if message.text.startswith("/"): return
+        
+        try:
+            # Let the user know the AI engine is thinking
+            await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            
+            completion = groq_client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": message.text}
+                ],
+                temperature=0.7,
+                max_tokens=1024
+            )
+            ai_response = completion.choices[0].message.content
+            await message.reply(ai_response)
+        except Exception as e:
+            logging.error(f"Groq Processing Failure: {e}")
+            await message.reply("⚙️ System undergoing heavy volume. Please prompt again in a moment!")
+        return
+
+    # Scenario C: Normal group chatter (Not tagged)
+    # Passed quietly through without replying to keep groups clean while mining user activity XP records!
 
 # 4. API Endpoints
 async def api_leaderboard_data(request):
@@ -192,7 +211,7 @@ async def api_live_ticker(request):
     p, c = await fetch_xrp_price()
     return web.json_response({"price": p, "change": c})
 
-# 5. Premium PD Card 3D Splash & Dashboard Frontend
+# 5. Premium PD Card 3D Splash & Dashboard Frontend HTML
 async def frontend_mini_app_dashboard(request):
     html_content = """
     <!DOCTYPE html>
@@ -210,7 +229,6 @@ async def frontend_mini_app_dashboard(request):
                 text-align: center; overflow: hidden;
             }
 
-            /* 3D WELCOME SPLASH SCREEN SETUP */
             #welcome-splash {
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                 background: radial-gradient(circle at center, #111622 0%, #040508 100%);
@@ -250,7 +268,6 @@ async def frontend_mini_app_dashboard(request):
             }
             .btn-enter:active { transform: scale(0.95); }
 
-            /* MAIN TRACKER DASHBOARD LAYOUT */
             #main-app { opacity: 0; transform: translateY(40px); transition: 0.7s ease; padding: 20px; overflow-y: auto; height: 100vh; }
 
             .profile-card {
@@ -262,7 +279,6 @@ async def frontend_mini_app_dashboard(request):
             h2 { color: #ffffff; font-size: 20px; font-weight: 900; margin: 0; letter-spacing: 1px; }
             .xp-val { font-size: 42px; font-weight: 900; color: #00ff6e; text-shadow: 0 0 20px rgba(0,255,110,0.4); margin: 8px 0; }
             
-            /* Live Dynamic Ticker Panel */
             .live-crypto-bar {
                 display: flex; justify-content: space-between; align-items: center;
                 background: rgba(0, 255, 110, 0.06); border: 1px dashed rgba(0, 255, 110, 0.3);
@@ -341,7 +357,6 @@ async def frontend_mini_app_dashboard(request):
                     app.style.opacity = '1';
                     app.style.transform = 'translateY(0)';
                     sync();
-                    // Polling real-time analytics updates every 10 seconds
                     setInterval(updateTicker, 10000);
                 }, 700);
             }
