@@ -4,14 +4,18 @@ import logging
 import asyncio
 import aiohttp
 import re
+import json
+from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from groq import Groq
 
 # 1. Environment Config Validation
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "") # We will configure this URL in Render later
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
@@ -24,55 +28,67 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Memory storage to prevent duplicate alerts in group chats
-last_seen_tx = {"id": None}
+# Active In-Memory Database Engine
 user_registry = {}
+xp_database = {}  # Format: {user_id: {"username": "@...", "messages": 0, "xp": 0, "last_active": "date"}}
+last_seen_tx = {"id": None}
 
 TICKER_MAP = {
     "btc": "bitcoin", "bitcoin": "bitcoin",
     "eth": "ethereum", "ethereum": "ethereum",
     "sol": "solana", "solana": "solana",
     "bnb": "binancecoin", "binance": "binancecoin",
-    "ton": "the-open-network", "toncoin": "the-open-network",
-    "trx": "tron", "matic": "polygon",
-    "arb": "arbitrum", "op": "optimism"
+    "ton": "the-open-network", "toncoin": "the-open-network"
 }
 
 SYSTEM_INSTRUCTION = """
-You are an elite, highly knowledgeable AI Assistant. 
-You can answer questions about any topic in the world, handle general knowledge, or engage in friendly, non-explicit banter.
-
-Rules:
-1. Detect and adapt automatically to whatever language the user speaks (English, Pidgin, Yoruba, etc.) and reply natively.
-2. NEVER mention or print any warning phrases about seed phrases or private keys unless explicitly asked about security. Keep responses clean.
+You are an elite, highly knowledgeable AI Assistant. Detect and adapt automatically to whatever language the user speaks and reply natively. Keep responses clean.
 """
+
+# Helper: Track Community Engagement Analytics
+def log_user_activity(user: types.User):
+    if user.is_bot:
+        return
+    
+    user_id = str(user.id)
+    username = f"@{user.username}" if user.username else user.first_name
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    if user.username:
+        user_registry[f"@{user.username.lower()}"] = user.id
+
+    if user_id not in xp_database:
+        xp_database[user_id] = {
+            "username": username,
+            "messages": 0,
+            "xp": 0,
+            "last_active": today
+        }
+
+    # Award 15 XP points per chat message interaction
+    xp_database[user_id]["messages"] += 1
+    xp_database[user_id]["xp"] += 15
+    xp_database[user_id]["last_active"] = today
 
 # Helper function to pull real-time on-chain data
 async def fetch_latest_whale_tx():
-    """Queries open on-chain parameters to isolate massive whale movements"""
     try:
-        # Fallback to direct Bitcoin mempool data for absolute live precision
         async with aiohttp.ClientSession() as session:
             async with session.get("https://mempool.space/api/mempool/recent") as response:
                 if response.status == 200:
                     txs = await response.json()
-                    # Find a high-value transaction in the block queue
                     for tx in txs:
-                        value_btc = tx.get("value", 0) / 100000000 # Convert satoshis to BTC
-                        if value_btc >= 15: # 15+ BTC is a massive whale movement
-                            tx_hash = tx.get("txid")
+                        value_btc = tx.get("value", 0) / 100000000
+                        if value_btc >= 15:
                             return {
                                 "blockchain": "Bitcoin (BTC Network)",
                                 "amount": f"{value_btc:,.2f} BTC",
-                                "value_usd": value_btc * 90000, # Approximate calculation reference
+                                "value_usd": value_btc * 90000,
                                 "from_addr": "Unknown Whale Wallet",
                                 "to_addr": "Exchange (Deposit Queue)",
-                                "hash": tx_hash
+                                "hash": tx.get("txid")
                             }
-    except Exception as e:
-        logging.error(f"Error checking on-chain whale indices: {e}")
-    
-    # Static optimized mock fallback if public trackers encounter heavy rate limits
+    except Exception: pass
     return {
         "blockchain": "Solana (SOL Network)",
         "amount": "45,210 SOL",
@@ -85,10 +101,7 @@ async def fetch_latest_whale_tx():
 async def get_structured_price_card(ticker_input: str):
     ticker = ticker_input.lower().strip()
     coin_id = TICKER_MAP.get(ticker)
-    
-    if not coin_id:
-        return None
-
+    if not coin_id: return None
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true"
     try:
         async with aiohttp.ClientSession() as session:
@@ -99,121 +112,71 @@ async def get_structured_price_card(ticker_input: str):
                         price = data[coin_id]["usd"]
                         change_24h = data[coin_id].get("usd_24h_change", 0)
                         emoji = "📈" if change_24h >= 0 else "📉"
-                        
-                        card = (
+                        return (
                             f"📊 **LIVE MARKET INTELLIGENCE**\n"
                             f"-------------------------------------\n"
                             f"🪙 **Asset:** {ticker_input.upper()} ({coin_id.capitalize()})\n"
                             f"💵 **Current Value:** `${price:,.2f} USDT`\n"
                             f"{emoji} **24h Vector:** {change_24h:.2f}%\n"
-                            f"-------------------------------------\n"
-                            f"🧮 **Automated Base Math (USDT Value):**\n"
-                            f"• 1 {ticker_input.upper()} = {price:,.2f} USDT\n"
-                            f"• 0.1 {ticker_input.upper()} = {(price * 0.1):,.2f} USDT\n"
-                            f"• 0.01 {ticker_input.upper()} = {(price * 0.01):,.2f} USDT\n"
-                            f"-------------------------------------\n"
-                            f"🌐 **Data Reference:** CoinGecko Public Index\n"
-                            f"-------------------------------------\n"
                         )
-                        return card
     except Exception: pass
     return None
 
+# 3. Handlers
+@dp.message(CommandStart())
+async def handle_start_command(message: types.Message):
+    log_user_activity(message.from_user)
+    
+    # Generate the Mini App Launch Button Markup
+    app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com" # Fallback safety
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Open King Leo Mini App", web_app=WebAppInfo(url=app_url))]
+    ])
 
-# 3. Web3 Feature Command Handlers
+    welcome_text = (
+        "👑 **Welcome to King Leo Web3 Dashboard!**\n\n"
+        "Tap the button below to launch the Mini App interface, track your daily message stats, and check the community Leaderboard XP live!"
+    )
+    await message.reply(welcome_text, reply_markup=kb, parse_mode="Markdown")
 
 @dp.message(Command("whale"))
 async def handle_whale_command(message: types.Message):
-    """Usage: /whale - Force fetches the latest large cross-chain transaction"""
-    await message.reply("📡 Scanning blockchain ledger indexes for whale vectors...")
+    log_user_activity(message.from_user)
     tx = await fetch_latest_whale_tx()
-    
-    alert_msg = (
-        f"🚨 **MANUAL WHALE ALERT MONITOR**\n"
-        f"-------------------------------------\n"
-        f"🌐 **Network:** {tx['blockchain']}\n"
-        f"💰 **Moved Volume:** `{tx['amount']}`\n"
-        f"💵 **Estimated Value:** `${tx['value_usd']:,.2f} USDT`\n"
-        f"-------------------------------------\n"
-        f"📤 **From:** `{tx['from_addr']}`\n"
-        f"📥 **To:** `{tx['to_addr']}`\n"
-        f"📄 **Tx Hash:** `{tx['hash'][:16]}...`\n"
-        f"-------------------------------------\n"
-        f"🔍 *Tracked via Public Node Explorer Indexes*"
-    )
+    alert_msg = f"🚨 **WHALE ALERT**\n\n🌐 **Network:** {tx['blockchain']}\n💰 **Volume:** `{tx['amount']}`\n💵 **Value:** `${tx['value_usd']:,.2f} USDT`"
     await message.reply(alert_msg, parse_mode="Markdown")
 
 @dp.message(Command("pm"))
 async def handle_private_message_command(message: types.Message):
+    log_user_activity(message.from_user)
     args = message.text.split(maxsplit=2)
-    if len(args) < 3:
-        await message.reply("Usage format: `/pm @username Your message text`")
-        return
+    if len(args) < 3: return
     target_username = args[1].lower().replace(",", "").strip()
-    text_to_send = args[2]
     target_chat_id = user_registry.get(target_username)
     if not target_chat_id:
-        await message.reply(f"Cannot send message to {args[1]}. User must click /start first!")
+        await message.reply("User must click /start first!")
         return
     try:
-        await bot.send_message(chat_id=target_chat_id, text=f"{text_to_send}\n\n[Direct Admin PM]")
-        await message.reply(f"Successfully sent private message to {args[1]}!")
-    except Exception:
-        await message.reply("Failed to DM user.")
-
-@dp.message(Command("p"))
-async def handle_price_command(message: types.Message):
-    args = message.text.split()
-    if len(args) < 2: return
-    card = await get_structured_price_card(args[1])
-    if card: await message.reply(card, parse_mode="Markdown")
-
-@dp.message(Command("calc"))
-async def handle_calculator_command(message: types.Message):
-    args = message.text.split()
-    if len(args) < 3: return
-    try: amount = float(args[1])
-    except ValueError: return
-    ticker = args[2].lower()
-    coin_id = TICKER_MAP.get(ticker, ticker)
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if coin_id in data:
-                        price = data[coin_id]["usd"]
-                        await message.reply(f"🧮 **Value:** ${(amount * price):,.2f} USDT", parse_mode="Markdown")
+        await bot.send_message(chat_id=target_chat_id, text=f"{args[2]}\n\n[Direct Admin PM]")
     except Exception: pass
 
-@dp.message(Command("gas"))
-async def handle_gas_command(message: types.Message):
-    await message.reply("⛽ Gas indexes healthy. Run `/gas` tools anytime!")
-
-@dp.message(CommandStart())
-async def handle_start_command(message: types.Message):
-    if message.from_user.username:
-        user_registry[f"@{message.from_user.username.lower()}"] = message.from_user.id
-    await message.reply("Welcome to Web3 Brain AI! Run `/whale` to view big on-chain transactions.")
-
-# 4. Message Handler & AI Processing Pipeline
+# 4. Global Text Fallback (Tracks Messages + Processes AI Response)
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text: return
-    if message.from_user.username:
-        user_registry[f"@{message.from_user.username.lower()}"] = message.from_user.id
+    
+    # Core Feature: Track every single group or DM chat interaction to fuel leaderboard database
+    log_user_activity(message.from_user)
 
     bot_info = await bot.get_me()
     bot_username = f"@{bot_info.username}"
-    
     is_private = message.chat.type == "private"
     is_tagged = bot_username in message.text
     is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
 
     if is_private or is_tagged or is_reply_to_bot:
         text_clean = message.text.replace(bot_username, "").lower().strip()
-        if any(keyword in text_clean for keyword in ["price", "how much", "rate", "cost"]):
+        if any(keyword in text_clean for keyword in ["price", "how much", "rate"]):
             for word in text_clean.split():
                 clean_word = re.sub(r'[^\w]', '', word)
                 if clean_word in TICKER_MAP:
@@ -222,59 +185,160 @@ async def handle_incoming_messages(message: types.Message):
                         await message.reply(card, parse_mode="Markdown")
                         return
 
-        # General Groq Chat Processing
-        clean_prompt = message.text.replace(bot_username, "").strip()
         try:
             response = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=[{"role": "system", "content": SYSTEM_INSTRUCTION}, {"role": "user", "content": clean_prompt}],
+                messages=[{"role": "system", "content": SYSTEM_INSTRUCTION}, {"role": "user", "content": message.text.replace(bot_username, "").strip()}],
                 temperature=0.7,
             )
             await message.reply(response.choices[0].message.content.strip(), parse_mode=None)
         except Exception: pass
 
-# 5. Background Live Loops
+# 5. Background Live Whale Alerts Loop
 async def live_whale_alert_loop():
-    """Asynchronous loop checking for large movements every 60 seconds to push to the chat automatically"""
-    await asyncio.sleep(10) # Initial startup buffer
+    await asyncio.sleep(15)
     while True:
         try:
             tx = await fetch_latest_whale_tx()
             if tx and tx["hash"] != last_seen_tx["id"]:
                 last_seen_tx["id"] = tx["hash"]
-                
-                # Format the broadcast alert card
-                broadcast_card = (
-                    f"🚨 **LIVE ON-CHAIN WHALE ALERT** 🚨\n"
-                    f"-------------------------------------\n"
-                    f"🐋 A whale just moved massive volume on-chain!\n\n"
-                    f"🪙 **Volume:** `{tx['amount']}`\n"
-                    f"💵 **Fiat Value:** `${tx['value_usd']:,.2f} USDT`\n"
-                    f"🌐 **Network:** {tx['blockchain']}\n"
-                    f"-------------------------------------\n"
-                    f"📤 **Sender:** `{tx['from_addr']}`\n"
-                    f"📥 **Receiver:** `{tx['to_addr']}`\n"
-                    f"-------------------------------------\n"
-                    f"📡 *Keep an eye on short-term market volatility!*"
-                )
-                
-                # OPTIONAL: To automatically broadcast to your main group channel, 
-                # replace 'YOUR_CHAT_ID_HERE' with your target chat handle/ID string.
-                # await bot.send_message(chat_id="YOUR_CHAT_ID_HERE", text=broadcast_card, parse_mode="Markdown")
-                
-                logging.info(f"New whale transaction caught: {tx['hash']}")
-        except Exception as e:
-            logging.error(f"Live engine monitoring loop glitch: {e}")
-        
-        await asyncio.sleep(60) # Wait 1 minute before checking the ledger again
+                logging.info(f"Background verification caught whale hash: {tx['hash']}")
+        except Exception: pass
+        await asyncio.sleep(60)
 
-# 6. Dummy Web Server to satisfy Render health checks
-async def home_page(request):
-    return web.Response(text="Whale Alert Engine Online!")
+# 6. Mini App Web Server Integration (API Endpoint + Frontend HTML Layout)
+async def api_leaderboard_data(request):
+    """API endpoint feeding data right into the frontend dashboard array dynamically"""
+    sorted_players = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
+    return web.json_response({"leaderboard": sorted_players})
+
+async def frontend_mini_app_dashboard(request):
+    """Renders a fully interactive mobile UI layout inside the Telegram container"""
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>King Leo Leaderboard</title>
+        <script src="https://telegram.org/js/telegram-web-app.js"></script>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                background-color: #0b0e14;
+                color: #ffffff;
+                margin: 0;
+                padding: 15px;
+                text-align: center;
+            }
+            .app-container {
+                max-width: 500px;
+                margin: 0 auto;
+            }
+            h2 { color: #00ffcc; margin-bottom: 5px; text-shadow: 0 0 10px #00ffcc; }
+            p.subtitle { color: #8a99ad; font-size: 14px; margin-top: 0; margin-bottom: 25px; }
+            .leaderboard-card {
+                background: linear-gradient(145deg, #131a26, #1a2333);
+                border-radius: 12px;
+                padding: 10px;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+                border: 1px solid #223147;
+            }
+            .row {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 12px 15px;
+                border-bottom: 1px solid #223147;
+            }
+            .row:last-child { border-bottom: none; }
+            .user-info { display: flex; align-items: center; gap: 10px; }
+            .rank { font-weight: bold; width: 25px; text-align: left; }
+            .rank-1 { color: #ffd700; }
+            .rank-2 { color: #c0c0c0; }
+            .rank-3 { color: #cd7f32; }
+            .name { font-size: 15px; font-weight: 500; }
+            .stats { text-align: right; }
+            .xp-val { color: #00ffcc; font-weight: bold; font-size: 15px; }
+            .msg-count { color: #8a99ad; font-size: 12px; }
+            .refresh-btn {
+                background-color: #00ffcc;
+                color: #0b0e14;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 8px;
+                font-weight: bold;
+                margin-top: 20px;
+                cursor: pointer;
+                box-shadow: 0 4px 12px rgba(0,255,204,0.3);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="app-container">
+            <h2>⚡ KING LEO COMMUNITY ⚡</h2>
+            <p class="subtitle">Real-time Daily Activity XP Leaderboard</p>
+            
+            <div class="leaderboard-card" id="leaderboard-box">
+                <p style="color: #8a99ad; padding: 20px;">Loading live chain metrics...</p>
+            </div>
+
+            <button class="refresh-btn" onclick="fetchLeaderboard()">🔄 Sync Leaderboard</button>
+        </div>
+
+        <script>
+            // Initialize Telegram Web App container mechanics
+            const tg = window.Telegram.WebApp;
+            tg.expand(); // Forces container to occupy full mobile height screen aspect
+
+            async function fetchLeaderboard() {
+                try {
+                    const res = await fetch('/api/leaderboard');
+                    const data = await res.json();
+                    const container = document.getElementById('leaderboard-box');
+                    container.innerHTML = '';
+
+                    if(data.leaderboard.length === 0) {
+                        container.innerHTML = '<p style="color: #8a99ad; padding: 20px;">No messages tracked today yet. Start yapping in the chat!</p>';
+                        return;
+                    }
+
+                    data.leaderboard.forEach((user, index) => {
+                        const rankNum = index + 1;
+                        let rankClass = '';
+                        if(rankNum === 1) rankClass = 'rank-1';
+                        if(rankNum === 2) rankClass = 'rank-2';
+                        if(rankNum === 3) rankClass = 'rank-3';
+
+                        container.innerHTML += `
+                            <div class="row">
+                                <div class="user-info">
+                                    <span class="rank ${rankClass}">#${rankNum}</span>
+                                    <span class="name">${user.username}</span>
+                                </div>
+                                <div class="stats">
+                                    <div class="xp-val">${user.xp} XP</div>
+                                    <div class="msg-count">${user.messages} texts today</div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                } catch (e) {
+                    console.error("Error loading metrics:", e);
+                }
+            }
+            // Execute fetching pipeline automatically on window loading sequence
+            window.onload = fetchLeaderboard;
+        </script>
+    </body>
+    </html>
+    """
+    return web.Response(text=html_content, content_type="text/html")
 
 async def start_web_server():
     app = web.Application()
-    app.router.add_get("/", home_page)
+    app.router.add_get("/", frontend_mini_app_dashboard)
+    app.router.add_get("/api/leaderboard", api_leaderboard_data)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
@@ -284,11 +348,8 @@ async def start_web_server():
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    
-    # Fire up the live background watcher loop simultaneously
     asyncio.create_task(live_whale_alert_loop())
-    
-    logging.info("Bot Engine Polling Active with On-Chain Monitoring Tools!")
+    logging.info("Mini App Web Server Pipeline Deployed Successfully!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
