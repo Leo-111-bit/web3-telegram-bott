@@ -1,7 +1,7 @@
+import os
 import sys
 import logging
 import asyncio
-import os
 import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
@@ -9,145 +9,177 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.enums import ChatType
 
-# --- CONFIG ---
+# 1. Environment Config
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+
 if not TELEGRAM_BOT_TOKEN:
     logging.error("CRITICAL: Missing TELEGRAM_BOT_TOKEN.")
     sys.exit(1)
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
-xp_database = {}
+
+# Active In-Memory Database Engine
+xp_database = {}  
 
 def get_or_create_user(user: types.User):
     user_id = str(user.id)
+    username = user.username or user.first_name or f"Trader_{user_id[:5]}"
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
     if user_id not in xp_database:
         xp_database[user_id] = {
-            "username": user.username or user.first_name or "Trader",
-            "xp": 0, "last_checkin": "", "checkin_days": []
+            "username": username,
+            "messages": 0,
+            "xp": 0,
+            "last_active": today,
+            "last_checkin": "",
+            "checkin_days": [],
+            "last_tag_claim": ""
         }
     return user_id
 
-# --- BOT HANDLERS ---
-@dp.message(CommandStart())
-async def start_handler(message: types.Message):
-    get_or_create_user(message.from_user)
-    app_url = WEB_APP_URL or "https://your-server.com"
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🐼 OPEN TRADING DESK", web_app=WebAppInfo(url=app_url))]
-    ])
-    await message.reply("🐼 **WELCOME TO PD CARD** 🐼\n\nTap below to claim your daily allocation in sequence!", reply_markup=kb)
+def log_user_activity(user: types.User):
+    if user.is_bot: return
+    user_id = get_or_create_user(user)
+    xp_database[user_id]["messages"] += 1
+    xp_database[user_id]["xp"] += 15
 
-# --- API ENDPOINTS ---
+# ==========================================
+# 3. TELEGRAM BOT HANDLERS
+# ==========================================
+
+@dp.message(CommandStart(), F.chat.type == ChatType.PRIVATE)
+async def handle_start_command_private(message: types.Message):
+    log_user_activity(message.from_user)
+    app_url = WEB_APP_URL or "https://google.com"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🐼 WELCOME TO PD CARD 🐼", web_app=WebAppInfo(url=app_url))]
+    ])
+    await message.reply("🐼 **WELCOME TO PD CARD** 🐼\n\nTap the button to access your trading tools and daily vouchers.", reply_markup=kb, parse_mode="Markdown")
+
+@dp.message()
+async def handle_incoming_messages(message: types.Message):
+    if not message.text: return
+    log_user_activity(message.from_user)
+    raw_text = message.text.strip().upper()
+
+    if "CHECK XP" in raw_text:
+        sorted_users = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
+        stats_output = "📊 **PD CARD LEADERBOARD** 📊\n\n"
+        for index, user in enumerate(sorted_users, start=1):
+            stats_output += f"🏅 #{index} | **{user['username']}** — `{user['xp']} XP`\n"
+        await message.reply(stats_output, parse_mode="Markdown")
+
+# ==========================================
+# 4. WEB SERVER API ENDPOINTS
+# ==========================================
+async def api_leaderboard_data(request):
+    sorted_players = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
+    return web.json_response({"leaderboard": sorted_players})
+
 async def api_user_status(request):
-    user_id = request.query.get("user_id")
+    user_id = request.query.get("user_id", "default_guest")
     if user_id not in xp_database:
-        xp_database[user_id] = {"username": "Trader", "xp": 0, "last_checkin": "", "checkin_days": []}
+        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        xp_database[user_id] = {"username": "Guest", "messages": 0, "xp": 0, "last_active": today, "last_checkin": "", "checkin_days": [], "last_tag_claim": ""}
     return web.json_response(xp_database[user_id])
 
 async def api_execute_checkin(request):
     data = await request.json()
     user_id = data.get("user_id")
+    day_num = int(data.get("day"))
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    user_profile = xp_database.get(user_id)
     
-    if user_id not in xp_database:
-        return web.json_response({"success": False, "message": "User not found!"})
-        
-    user_profile = xp_database[user_id]
-    
-    # Check if already claimed today
-    if user_profile["last_checkin"] == today_str:
-        return web.json_response({"success": False, "message": "🚫 You don claim today reward already!"})
-    
-    # Calculate next day
-    next_day = len(user_profile["checkin_days"]) + 1
-    
-    if next_day > 30:
-        return web.json_response({"success": False, "message": "✅ You don finish all 30 days!"})
-        
+    if not user_profile or user_profile["last_checkin"] == today_str:
+        return web.json_response({"success": False, "message": "🚫 Voucher Locked: Come back tomorrow!"})
+
     user_profile["xp"] += 10
     user_profile["last_checkin"] = today_str
-    user_profile["checkin_days"].append(next_day)
-    return web.json_response({"success": True, "message": f"💳 Success! You claimed Day {next_day}."})
+    user_profile["checkin_days"].append(day_num)
+    return web.json_response({"success": True, "message": f"💳 Day {day_num} processed! +10 XP added."})
 
-async def api_leaderboard(request):
-    data = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
-    return web.json_response({"leaderboard": data})
-
-# --- FRONTEND ---
+# ==========================================
+# 5. WEB APP UI
+# ==========================================
 async def frontend_mini_app_dashboard(request):
-    html_content = """<!DOCTYPE html>
-<html>
-<head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        body { background: #0f172a; color: white; font-family: sans-serif; padding: 20px; }
-        .card { background: rgba(30,41,59,0.7); padding: 20px; border-radius: 20px; margin-bottom: 20px; }
-        .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
-        .day { padding: 10px; background: #334155; border-radius: 8px; text-align: center; cursor: pointer; }
-        .day.done { background: #8b5cf6; }
-        .day.next { border: 2px solid #22c55e; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2 id="user-xp">0 XP</h2>
-        <p>Wallet Balance</p>
-    </div>
-    <div class="card">
-        <h3>30-Day Check-in</h3>
-        <div class="grid" id="grid"></div>
-    </div>
-    <script>
-        const tg = window.Telegram.WebApp; tg.expand();
-        const userId = String(tg.initDataUnsafe.user?.id || 7777);
-        
-        async function sync() {
-            const res = await fetch('/api/userstatus?user_id='+userId);
-            const u = await res.json();
-            document.getElementById('user-xp').innerText = u.xp + ' XP';
-            const grid = document.getElementById('grid'); grid.innerHTML = '';
-            const nextDay = u.checkin_days.length + 1;
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://telegram.org/js/telegram-web-app.js"></script>
+        <style>
+            body { background: #08070d; color: white; font-family: sans-serif; padding: 20px; }
+            .feature-section-panel { background: rgba(15, 12, 28, 0.8); border-radius: 18px; padding: 20px; margin-bottom: 25px; border: 1px solid #333; }
+            .voucher-grid-matrix { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+            .voucher-ticket { background: #1e1b36; padding: 14px 0; border-radius: 10px; cursor: pointer; text-align: center; }
+            .voucher-ticket.redeemed { background: #f43f5e; }
+        </style>
+    </head>
+    <body>
+        <div class="feature-section-panel">
+            <h2 id="user-total-xp">0 XP</h2>
+            <div id="calendar-box" class="voucher-grid-matrix"></div>
+        </div>
+        <script>
+            const tg = window.Telegram.WebApp; tg.expand();
+            const userId = String(tg.initDataUnsafe.user?.id || 7777);
             
-            for(let i=1; i<=30; i++) {
-                const done = u.checkin_days.includes(i);
-                const el = document.createElement('div');
-                el.className = 'day ' + (done ? 'done' : (i == nextDay ? 'next' : ''));
-                el.innerText = 'D' + i;
-                if(i == nextDay) el.onclick = claim;
-                grid.appendChild(el);
+            async function syncAllData() {
+                const res = await fetch(`/api/userstatus?user_id=${userId}`);
+                const u = await res.json();
+                document.getElementById('user-total-xp').innerText = u.xp + ' XP';
+                const container = document.getElementById('calendar-box');
+                container.innerHTML = '';
+                for (let d = 1; d <= 30; d++) {
+                    const isClaimed = u.checkin_days.includes(d);
+                    const coupon = document.createElement('div');
+                    coupon.className = `voucher-ticket ${isClaimed ? 'redeemed' : ''}`;
+                    coupon.innerText = isClaimed ? `✓ D${d}` : `D${d}`;
+                    if (!isClaimed) coupon.onclick = () => claimCoupon(d);
+                    container.appendChild(coupon);
+                }
             }
-        }
-        async function claim() {
-            const res = await fetch('/api/checkin', {
-                method: 'POST', body: JSON.stringify({user_id: userId}), 
-                headers: {'Content-Type': 'application/json'}
-            });
-            const r = await res.json(); alert(r.message); sync();
-        }
-        sync();
-    </script>
-</body>
-</html>"""
+            async function claimCoupon(dayNum) {
+                const res = await fetch('/api/checkin', {
+                    method: 'POST', body: JSON.stringify({ user_id: userId, day: dayNum }),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await res.json();
+                alert(result.message);
+                syncAllData();
+            }
+            window.onload = syncAllData;
+        </script>
+    </body>
+    </html>
+    """
     return web.Response(text=html_content, content_type="text/html")
 
-# --- SERVER ---
+# ==========================================
+# 6. SERVER & POLLING CONFIGURATION
+# ==========================================
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", frontend_mini_app_dashboard)
+    app.router.add_get("/api/leaderboard", api_leaderboard_data)
     app.router.add_get("/api/userstatus", api_user_status)
-    app.router.add_get("/api/leaderboard", api_leaderboard)
     app.router.add_post("/api/checkin", api_execute_checkin)
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 10000))).start()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 async def main():
+    await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
+    logging.info("PD Card Trading Engine Live!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
