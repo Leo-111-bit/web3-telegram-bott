@@ -87,15 +87,20 @@ async def handle_whale_command(message: types.Message):
     log_user_activity(message.from_user)
     await message.reply("📡 Tracking live whale ledger systems...", parse_mode="Markdown")
 
-# New Global Text Handler: Tracks Messages + Attaches Mini App Button inside Group/Private tag responses
+# Global Text Handler: Updated for Bulletproof Group Tag Processing
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
-    if not message.text: return
+    # Safe check for text content so media/system messages don't break execution flow
+    if not message.text: 
+        return
+        
     log_user_activity(message.from_user)
 
     bot_info = await bot.get_me()
     bot_username = f"@{bot_info.username}"
-    is_tagged = bot_username in message.text
+    
+    # Case-insensitive checks to handle typing variations smoothly in group environments
+    is_tagged = bot_username.lower() in message.text.lower()
 
     if is_tagged:
         user_id = get_or_create_user(message.from_user)
@@ -109,7 +114,7 @@ async def handle_incoming_messages(message: types.Message):
             [InlineKeyboardButton(text="💎 ENTER 3D LEO REALM 💎", web_app=WebAppInfo(url=app_url))]
         ])
         
-        # Reply directly with the embedded dashboard link button
+        # Reply directly inside the group chat context
         await message.reply(
             f'🎉 🔥 BOOM! "{username_label}" just gained {secret_xp} XP for tagging the AI!',
             reply_markup=kb
