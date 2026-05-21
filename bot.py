@@ -1,16 +1,18 @@
-import os
 import sys
 import logging
 import asyncio
 import random
 import datetime
+import os
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.enums import ChatType
 
-# 1. Environment Config Validation
+# ==========================================
+# 1. ENVIRONMENT CONFIG & INIT
+# ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
 
@@ -20,68 +22,50 @@ if not TELEGRAM_BOT_TOKEN:
     logging.error("CRITICAL: Missing TELEGRAM_BOT_TOKEN.")
     sys.exit(1)
 
-# 2. Initialization
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
-# Active In-Memory Database Engine
+# Active In-Memory Database
 user_registry = {}
 xp_database = {}  
 
 def get_or_create_user(user: types.User):
     user_id = str(user.id)
-    
     if user.username:
         username = f"@{user.username}"
         user_registry[f"@{user.username.lower()}"] = user.id
     else:
         username = user.first_name if user.first_name else f"Trader_{user_id[:5]}"
-
+    
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-
     if user_id not in xp_database:
         xp_database[user_id] = {
-            "username": username,
-            "messages": 0,
-            "xp": 0,
-            "last_active": today,
-            "last_checkin": "",
-            "checkin_days": [],
-            "last_tag_claim": "",
-            "last_wheel_spin": ""
+            "username": username, "messages": 0, "xp": 0, "last_active": today,
+            "last_checkin": "", "checkin_days": [], "last_tag_claim": "", "last_wheel_spin": ""
         }
     else:
         xp_database[user_id]["username"] = username
-        
     return user_id
 
 def log_user_activity(user: types.User):
     if user.is_bot: return
     user_id = get_or_create_user(user)
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    
     xp_database[user_id]["messages"] += 1
     xp_database[user_id]["xp"] += 15
     xp_database[user_id]["last_active"] = today
 
 # ==========================================
-# 3. TELEGRAM BOT HANDLERS
+# 2. TELEGRAM BOT HANDLERS
 # ==========================================
-
 @dp.message(CommandStart(), F.chat.type == ChatType.PRIVATE)
 async def handle_start_command_private(message: types.Message):
     log_user_activity(message.from_user)
-    app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
-    
+    app_url = WEB_APP_URL if WEB_APP_URL else "https://your-server-url.com"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🐼 WELCOME TO PD CARD 🐼", web_app=WebAppInfo(url=app_url))]
     ])
-    
-    welcome_text = (
-        "🐼 **WELCOME TO PD CARD** 🐼\n\n"
-        "Your premium gift card index and trade hub profile is live! Tap the digital voucher button below to access your live calculator tools, spin the Panda Wheel, claim 30-day coupon rewards, and view real-time rankings."
-    )
-    await message.reply(welcome_text, reply_markup=kb, parse_mode="Markdown")
+    await message.reply("🐼 **WELCOME TO PD CARD** 🐼\n\nAccess your live tools below!", reply_markup=kb, parse_mode="Markdown")
 
 @dp.message(Command("whale"))
 async def handle_whale_command(message: types.Message):
@@ -90,51 +74,19 @@ async def handle_whale_command(message: types.Message):
 
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
-    if not message.text: 
-        return
-        
+    if not message.text: return
     log_user_activity(message.from_user)
     raw_text = message.text.strip().upper()
-    is_private = message.chat.type == ChatType.PRIVATE
-
+    
     if "CHECK XRP" in raw_text or "CHECK XP" in raw_text:
-        if not xp_database:
-            await message.reply("📉 System index empty! No traders have active credit scores yet.")
-            return
-
         sorted_users = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
         stats_output = "📊 **PD CARD OFFICIAL TRADING LEDGER** 📊\n\n"
         for index, user in enumerate(sorted_users, start=1):
-            stats_output += f"🏅 #{index} | **{user['username']}** — `{user['xp']} XP` ({user['messages']} activity index)\n"
-        
+            stats_output += f"🏅 #{index} | **{user['username']}** — `{user['xp']} XP`\n"
         await message.reply(stats_output, parse_mode="Markdown")
-        return
-
-    bot_info = await bot.get_me()
-    bot_username = f"@{bot_info.username}"
-    is_tagged = bot_username.lower() in message.text.lower()
-
-    if is_tagged and not is_private:
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if (now - message.date).total_seconds() > 86400:
-            return  
-
-        user_id = get_or_create_user(message.from_user)
-        user_profile = xp_database[user_id]
-        username_label = user_profile["username"]
-        today_str = now.strftime("%Y-%m-%d")
-        
-        if user_profile.get("last_tag_claim") == today_str:
-            await message.reply(f"🐼 Welcome back to the counter, {username_label}! Your daily mention allocation is locked. Let's trade gift cards! 💳")
-        else:
-            secret_xp = random.randint(20, 50)
-            user_profile["xp"] += secret_xp
-            user_profile["last_tag_claim"] = today_str  
-            
-            await message.reply(f"🎉 🐼 BOOM! {username_label} just claimed their daily PD Card bonus of {secret_xp} XP! Drop your vouchers for premium rates!")
 
 # ==========================================
-# 4. WEB SERVER API ENDPOINTS
+# 3. WEB SERVER API ENDPOINTS
 # ==========================================
 async def api_leaderboard_data(request):
     sorted_players = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
@@ -143,10 +95,6 @@ async def api_leaderboard_data(request):
 async def api_user_status(request):
     user_id = request.query.get("user_id", "default_guest")
     username = request.query.get("username", "Guest")
-    
-    if username == "undefined" or not username or username.startswith("null"):
-        username = f"Trader_{user_id[:5]}"
-
     if user_id not in xp_database:
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         xp_database[user_id] = {"username": username, "messages": 0, "xp": 0, "last_active": today, "last_checkin": "", "checkin_days": [], "last_tag_claim": "", "last_wheel_spin": ""}
@@ -158,45 +106,28 @@ async def api_execute_checkin(request):
     day_num = int(data.get("day"))
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     user_profile = xp_database[user_id]
-    
     if user_profile["last_checkin"] == today_str:
-        return web.json_response({"success": False, "message": "🚫 Voucher Locked: Come back tomorrow to redeem another day allocation!"})
-
+        return web.json_response({"success": False, "message": "🚫 Voucher Locked: Come back tomorrow!"})
     user_profile["xp"] += 10
     user_profile["last_checkin"] = today_str
     user_profile["checkin_days"].append(day_num)
-    return web.json_response({"success": True, "message": f"💳 Day {day_num} Gift Card processed successfully! +10 XP added to balance."})
+    return web.json_response({"success": True, "message": f"💳 Day {day_num} processed! +10 XP."})
 
 async def api_execute_spin(request):
     data = await request.json()
     user_id = data.get("user_id")
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     user_profile = xp_database[user_id]
-    
     if user_profile.get("last_wheel_spin") == today_str:
-        return web.json_response({"success": False, "message": "🚫 Wheel Locked: Your lucky spin allocation resets tomorrow!"})
-        
-    prizes = [
-        {"name": "+5 XP Voucher", "value": 5, "index": 0},
-        {"name": "+50 XP JACKPOT", "value": 50, "index": 1},
-        {"name": "+15 XP Voucher", "value": 15, "index": 2},
-        {"name": "+5/$ Top Rate Coupon", "value": 0, "index": 3},
-        {"name": "+25 XP Voucher", "value": 25, "index": 4},
-        {"name": "+10 XP Voucher", "value": 10, "index": 5}
-    ]
-    
+        return web.json_response({"success": False, "message": "🚫 Wheel Locked!"})
+    prizes = [{"name": "+5 XP", "value": 5, "index": 0}, {"name": "+50 XP", "value": 50, "index": 1}, {"name": "+15 XP", "value": 15, "index": 2}, {"name": "+5/$", "value": 0, "index": 3}, {"name": "+25 XP", "value": 25, "index": 4}, {"name": "+10 XP", "value": 10, "index": 5}]
     winning_slice = random.choice(prizes)
     user_profile["xp"] += winning_slice["value"]
     user_profile["last_wheel_spin"] = today_str
-    
-    return web.json_response({
-        "success": True, 
-        "slice_index": winning_slice["index"], 
-        "message": f"🎉 Won {winning_slice['name']}! Wallet balance updated securely."
-    })
+    return web.json_response({"success": True, "slice_index": winning_slice["index"], "message": f"🎉 Won {winning_slice['name']}!"})
 
 # ==========================================
-# 5. PREMIUM UI (REPLACED WITH NEW DESIGN)
+# 4. FRONTEND UI
 # ==========================================
 async def frontend_mini_app_dashboard(request):
     html_content = """
@@ -205,69 +136,99 @@ async def frontend_mini_app_dashboard(request):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>PD CARD | PREMIUM</title>
+        <title>PD Card</title>
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
-            :root { --accent: #a855f7; --bg: #0a0e17; --glass: rgba(255,255,255,0.05); }
-            body { font-family: -apple-system, sans-serif; background: var(--bg); color: white; margin: 0; padding: 15px; }
-            .card { background: var(--glass); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; padding: 20px; margin-bottom: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-            .balance-text { font-size: 36px; font-weight: 800; background: linear-gradient(90deg, #fff, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-            .grid-matrix { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
-            .cell { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 10px; font-size: 10px; text-align: center; border: 1px solid rgba(255,255,255,0.05); }
-            .btn { background: var(--accent); border: none; padding: 12px; border-radius: 12px; color: white; font-weight: bold; width: 100%; margin-top: 10px; }
-            .spin-wheel { width: 200px; height: 200px; border-radius: 50%; border: 4px solid var(--accent); margin: 20px auto; transition: transform 4s ease-out; }
+            body { font-family: sans-serif; background: #08070d; color: white; margin: 0; padding: 20px; text-align: center; }
+            .giftcard-3d-frame { background: linear-gradient(135deg, #1e1b36, #0f0c1c); border: 2px solid #a855f7; border-radius: 20px; padding: 25px; margin-bottom: 25px; }
+            .brand-logo-text { font-size: 26px; font-weight: 900; background: linear-gradient(90deg, #a855f7, #f43f5e); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+            .voucher-balance-display { font-size: 45px; font-weight: 900; margin: 15px 0; font-family: monospace; }
+            .feature-section-panel { background: #151224; border-radius: 18px; padding: 20px; margin-bottom: 25px; text-align: left; }
+            .section-header-title { font-weight: 800; color: #a855f7; margin-bottom: 15px; text-transform: uppercase; }
+            .calc-input-box { width: 100%; padding: 12px; background: #1e1b36; border: 1px solid #a855f7; border-radius: 10px; color: white; margin-bottom: 10px; box-sizing: border-box; }
+            .calc-output-payout { padding: 15px; border-radius: 10px; text-align: center; font-size: 20px; font-weight: 900; color: #f43f5e; border: 1px solid #f43f5e; }
+            .wheel-spinner-canvas { width: 200px; height: 200px; border-radius: 50%; border: 6px solid #a855f7; background: conic-gradient(#1e1b36 0deg 60deg, #f43f5e 60deg 120deg, #2e2a54 120deg 180deg, #a855f7 180deg 240deg, #121024 240deg 300deg, #ec4899 300deg 360deg); margin: 15px auto; transition: transform 4s ease-out; }
+            .spin-trigger-btn { width: 100%; background: #a855f7; border: none; padding: 15px; border-radius: 12px; color: white; font-weight: 900; cursor: pointer; }
+            .voucher-grid-matrix { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+            .voucher-ticket { background: #1e1b36; padding: 10px; border-radius: 8px; font-size: 10px; cursor: pointer; border: 1px solid #333; }
+            .voucher-ticket.redeemed { background: #f43f5e; }
+            .leader-desk-row { display: flex; justify-content: space-between; padding: 10px; background: #1e1b36; margin-bottom: 5px; border-radius: 8px; }
         </style>
     </head>
     <body>
-        <div class="card">
-            <div style="font-size: 12px; color: #a855f7; font-weight: bold;">TOTAL VOUCHER BALANCE</div>
-            <div class="balance-text" id="user-total-xp">0.00 XP</div>
+        <div class="giftcard-3d-frame">
+            <div class="brand-logo-text">PD CARD</div>
+            <div class="voucher-balance-display" id="user-total-xp">00 XP</div>
+            <div id="user-display">TRADER</div>
         </div>
-        <div class="card">
-            <div style="margin-bottom: 10px; font-weight: bold;">Premium Rate Calculator</div>
-            <input type="number" id="card-amount" placeholder="Amount ($)" style="width: 100%; padding: 12px; border-radius: 10px; border:none; background: #1a1a1a; color: white; margin-bottom: 10px;" oninput="runCalc()">
-            <div id="payout-payout" style="font-weight: bold; color: #f43f5e;">PAYOUT: ₦0</div>
+        <div class="feature-section-panel">
+            <div class="section-header-title">📈 Live Rate Index</div>
+            <select class="calc-input-box" id="card-type" onchange="runCalculation()">
+                <option value="920">Apple - ₦920/$</option>
+                <option value="950">Razer - ₦950/$</option>
+            </select>
+            <input type="number" class="calc-input-box" id="card-amount" value="100" oninput="runCalculation()">
+            <div class="calc-output-payout" id="payout-payout">ESTIMATED PAYOUT: ₦92,000</div>
         </div>
-        <div class="card">
-            <div class="spin-wheel" id="spin-wheel"></div>
-            <button class="btn" onclick="executeLuckySpin()">TRIGGER SPIN</button>
+        <div class="feature-section-panel">
+            <div class="section-header-title">🎡 Lucky Panda Wheel</div>
+            <div class="wheel-spinner-canvas" id="spin-wheel"></div>
+            <button class="spin-trigger-btn" onclick="executeLuckySpin()">SPIN</button>
         </div>
-        <div class="card">
-            <div class="grid-matrix" id="calendar-box"></div>
+        <div class="feature-section-panel">
+            <div class="section-header-title">🎫 30-Day Grid</div>
+            <div class="voucher-grid-matrix" id="calendar-box"></div>
         </div>
-        <div class="card" id="leaderboard-box"></div>
+        <div class="feature-section-panel">
+            <div class="section-header-title">🏆 Leaderboard</div>
+            <div id="leaderboard-box"></div>
+        </div>
         <script>
             const tg = window.Telegram.WebApp; tg.expand();
-            const userId = String(tg.initDataUnsafe.user?.id || 7777);
-            const userHandle = tg.initDataUnsafe.user?.username || "Trader";
-            
-            function runCalc() { 
-                const val = document.getElementById('card-amount').value || 0;
-                document.getElementById('payout-payout').innerText = `PAYOUT: ₦${(val * 920).toLocaleString()}`;
+            const rawUser = tg.initDataUnsafe.user || { id: 7777, first_name: "Trader" };
+            const userId = String(rawUser.id);
+            let userHandle = rawUser.username ? `@${rawUser.username}` : (rawUser.first_name || "Trader");
+            document.getElementById('user-display').innerText = userHandle;
+
+            function runCalculation() {
+                const rate = parseFloat(document.getElementById('card-type').value);
+                const amt = parseFloat(document.getElementById('card-amount').value) || 0;
+                document.getElementById('payout-payout').innerText = `ESTIMATED PAYOUT: ₦${(rate*amt).toLocaleString()}`;
             }
-            
-            async function syncAllData() {
-                const res = await fetch(`/api/userstatus?user_id=${userId}&username=${userHandle}`);
-                const data = await res.json();
-                document.getElementById('user-total-xp').innerText = `${data.xp}.00 XP`;
-                const cal = document.getElementById('calendar-box');
-                cal.innerHTML = '';
-                for(let i=1; i<=30; i++) {
-                    const isClaimed = data.checkin_days.includes(i);
-                    cal.innerHTML += `<div class="cell" style="${isClaimed ? 'background:var(--accent)' : ''}">${i}</div>`;
-                }
-            }
-            
+
             async function executeLuckySpin() {
-                const res = await fetch('/api/spinwheel', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: userId})});
-                const data = await res.json();
-                if(data.success) {
-                    document.getElementById('spin-wheel').style.transform = `rotate(${3600 + (data.slice_index * 60)}deg)`;
-                    setTimeout(syncAllData, 4000);
-                } else alert(data.message);
+                const res = await fetch('/api/spinwheel', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ user_id: userId }) });
+                const result = await res.json();
+                if(result.success) {
+                    const wheel = document.getElementById('spin-wheel');
+                    wheel.style.transform = `rotate(${(result.slice_index * 60) + 1440}deg)`;
+                    setTimeout(syncAllData, 4100);
+                } else alert(result.message);
             }
-            
-            window.onload = syncAllData;
+
+            async function syncAllData() {
+                const [statusRes, lbRes] = await Promise.all([
+                    fetch(`/api/userstatus?user_id=${userId}&username=${encodeURIComponent(userHandle)}`),
+                    fetch('/api/leaderboard')
+                ]);
+                const user = await statusRes.json();
+                const lb = await lbRes.json();
+                document.getElementById('user-total-xp').innerText = `${user.xp} XP`;
+                const cal = document.getElementById('calendar-box'); cal.innerHTML = '';
+                for(let i=1; i<=30; i++) {
+                    const isClaimed = user.checkin_days.includes(i);
+                    cal.innerHTML += `<div class="voucher-ticket ${isClaimed ? 'redeemed' : ''}" onclick="claimCoupon(${i})">D${i}</div>`;
+                }
+                const lbBox = document.getElementById('leaderboard-box'); lbBox.innerHTML = '';
+                lb.leaderboard.forEach((u, i) => lbBox.innerHTML += `<div class="leader-desk-row"><span>#${i+1} ${u.username}</span><span>${u.xp} XP</span></div>`);
+            }
+
+            async function claimCoupon(day) {
+                const res = await fetch('/api/checkin', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ user_id: userId, day: day }) });
+                const r = await res.json(); alert(r.message); syncAllData();
+            }
+
+            window.onload = () => { syncAllData(); runCalculation(); };
         </script>
     </body>
     </html>
@@ -275,7 +236,7 @@ async def frontend_mini_app_dashboard(request):
     return web.Response(text=html_content, content_type="text/html")
 
 # ==========================================
-# 6. SERVER & POLLING CONFIGURATION
+# 5. SERVER RUNNER
 # ==========================================
 async def start_web_server():
     app = web.Application()
