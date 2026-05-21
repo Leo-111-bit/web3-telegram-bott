@@ -2,48 +2,36 @@ import os
 import sys
 import logging
 import asyncio
-import aiohttp
-import re
 import random
-from datetime import datetime
+import datetime
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from groq import Groq
+from aiogram.enums import ChatType
 
 # 1. Environment Config Validation
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-if not TELEGRAM_BOT_TOKEN or not GROQ_API_KEY:
-    logging.error("CRITICAL: Missing TELEGRAM_BOT_TOKEN or GROQ_API_KEY.")
+if not TELEGRAM_BOT_TOKEN:
+    logging.error("CRITICAL: Missing TELEGRAM_BOT_TOKEN.")
     sys.exit(1)
 
 # 2. Initialization
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
-groq_client = Groq(api_key=GROQ_API_KEY)
 
 # Active In-Memory Database Engine
 user_registry = {}
 xp_database = {}  
 
-last_seen_tx = {"id": None}
-
-TICKER_MAP = {
-    "btc": "bitcoin", "eth": "ethereum", "sol": "solana", "bnb": "binancecoin", "ton": "the-open-network"
-}
-
-SYSTEM_INSTRUCTION = "You are an elite, highly knowledgeable AI Assistant. Detect and adapt automatically to whatever language the user speaks and reply natively."
-
 def get_or_create_user(user: types.User):
     user_id = str(user.id)
     username = f"@{user.username}" if user.username else user.first_name
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
     if user.username:
         user_registry[f"@{user.username.lower()}"] = user.id
@@ -63,22 +51,28 @@ def get_or_create_user(user: types.User):
 def log_user_activity(user: types.User):
     if user.is_bot: return
     user_id = get_or_create_user(user)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     
     xp_database[user_id]["messages"] += 1
     xp_database[user_id]["xp"] += 15
     xp_database[user_id]["last_active"] = today
 
-# 3. Handlers
-@dp.message(CommandStart())
-async def handle_start_command(message: types.Message):
+# ==========================================
+# 3. TELEGRAM BOT HANDLERS
+# ==========================================
+
+# PRIVATE CHAT (DM): Correct Welcome Card Routing with Panda Style
+@dp.message(CommandStart(), F.chat.type == ChatType.PRIVATE)
+async def handle_start_command_private(message: types.Message):
     log_user_activity(message.from_user)
     app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🐼 WELCOME TO PD CARD 🐼", web_app=WebAppInfo(url=app_url))]
     ])
+    
     welcome_text = (
-        "🐼 **WELCOME TO THE PD CARD TRADING HUB** 🐼\n\n"
+        "🐼 **WELCOME TO PD CARD** 🐼\n\n"
         "Your global gift card premium index profile is live! Tap the digital voucher dashboard button below to sync your profile, claim daily bonus allocations, and view the trading desk leaderboard."
     )
     await message.reply(welcome_text, reply_markup=kb, parse_mode="Markdown")
@@ -88,7 +82,7 @@ async def handle_whale_command(message: types.Message):
     log_user_activity(message.from_user)
     await message.reply("📡 Tracking live gift card allocation ledgers...", parse_mode="Markdown")
 
-# Global Text Fallback (Tracks Live Messages + Tags Rewards + Stats Command)
+# GLOBAL MESSAGE HANDLER: Handles Leaderboard & Group Mentions
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text: 
@@ -96,9 +90,8 @@ async def handle_incoming_messages(message: types.Message):
         
     log_user_activity(message.from_user)
 
-    # Clean text to process triggers smoothly
     raw_text = message.text.strip().upper()
-    is_private = message.chat.type == "private"
+    is_private = message.chat.type == ChatType.PRIVATE
 
     # --- TRIGGER FOR "CHECK XRP" OR "CHECK XP" ---
     if "CHECK XRP" in raw_text or "CHECK XP" in raw_text:
@@ -106,14 +99,12 @@ async def handle_incoming_messages(message: types.Message):
             await message.reply("📉 System index empty! No traders have active credit scores yet.")
             return
 
-        # Sort all registered database users by their total XP holdings
         sorted_users = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
         
-        stats_output = "📊 **PD CARD OFFICIAL TRADING LEDBER** 📊\n\n"
+        stats_output = "📊 **PD CARD OFFICIAL TRADING LEDGER** 📊\n\n"
         for index, user in enumerate(sorted_users, start=1):
             stats_output += f"🏅 #{index} | **{user['username']}** — `{user['xp']} XP` ({user['messages']} activity index)\n"
         
-        # Blast the full list right into the chat
         await message.reply(stats_output, parse_mode="Markdown")
         return
 
@@ -123,25 +114,31 @@ async def handle_incoming_messages(message: types.Message):
     is_tagged = bot_username.lower() in message.text.lower()
 
     if is_tagged and not is_private:
+        # 24-HOUR STALE MESSAGE GATE
+        now = datetime.datetime.now(datetime.timezone.utc)
+        time_difference = (now - message.date).total_seconds()
+        if time_difference > 86400:
+            return  # Drop old messages or system sync delays
+
         user_id = get_or_create_user(message.from_user)
         username_label = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        today_str = now.strftime("%Y-%m-%d")
         
         user_profile = xp_database[user_id]
         
-        # Check if they already claimed the tag reward today
+        # Check if they already claimed the tag reward today (24h lapse)
         if user_profile.get("last_tag_claim") == today_str:
-            # Already claimed today? Just display the welcome message
             await message.reply(f"🐼 Welcome back to the counter, {username_label}! Your daily mention allocation is locked. Let's trade gift cards! 💳")
         else:
-            # First time tagging the bot today! Give them the reward
             secret_xp = random.randint(20, 50)
             user_profile["xp"] += secret_xp
-            user_profile["last_tag_claim"] = today_str  # Lock it for the rest of today
+            user_profile["last_tag_claim"] = today_str  # Lock it until next UTC date roll
             
             await message.reply(f"🎉 🐼 BOOM! {username_label} just claimed their daily PD Card bonus of {secret_xp} XP! Drop your vouchers for premium rates!")
 
-# 4. API Endpoints
+# ==========================================
+# 4. WEB SERVER API ENDPOINTS
+# ==========================================
 async def api_leaderboard_data(request):
     sorted_players = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
     return web.json_response({"leaderboard": sorted_players})
@@ -150,14 +147,15 @@ async def api_user_status(request):
     user_id = request.query.get("user_id", "default_guest")
     username = request.query.get("username", "Guest")
     if user_id not in xp_database:
-        xp_database[user_id] = {"username": username, "messages": 0, "xp": 0, "last_active": "", "last_checkin": "", "checkin_days": [], "last_tag_claim": ""}
+        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        xp_database[user_id] = {"username": username, "messages": 0, "xp": 0, "last_active": today, "last_checkin": "", "checkin_days": [], "last_tag_claim": ""}
     return web.json_response(xp_database[user_id])
 
 async def api_execute_checkin(request):
     data = await request.json()
     user_id = data.get("user_id")
     day_num = int(data.get("day"))
-    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     user_profile = xp_database[user_id]
     
     if user_profile["last_checkin"] == today_str:
@@ -168,7 +166,9 @@ async def api_execute_checkin(request):
     user_profile["checkin_days"].append(day_num)
     return web.json_response({"success": True, "message": f"💳 Day {day_num} Gift Card processed successfully! +10 XP added to balance."})
 
-# 5. Premium 3D Animated UI Frontend HTML
+# ==========================================
+# 5. PREMIUM 3D PANDA WEB APP UI
+# ==========================================
 async def frontend_mini_app_dashboard(request):
     html_content = """
     <!DOCTYPE html>
@@ -251,7 +251,6 @@ async def frontend_mini_app_dashboard(request):
                 border-color: #a855f7; box-shadow: 0 10px 15px -3px rgba(168, 85, 247, 0.4);
             }
 
-            /* Perforated edge lines to make it look like a real trade coupon */
             .voucher-ticket::before, .voucher-ticket::after {
                 content: ''; position: absolute; width: 8px; height: 8px;
                 background: #08070d; border-radius: 50%; top: 50%; transform: translateY(-50%);
@@ -297,7 +296,6 @@ async def frontend_mini_app_dashboard(request):
     </head>
     <body>
 
-        <!-- Floating 3D Gift Card UI Shield -->
         <div class="giftcard-3d-frame" id="main-card">
             <div class="brand-logo-text">PD CARD</div>
             <div class="panda-badge">🐼</div>
@@ -321,7 +319,6 @@ async def frontend_mini_app_dashboard(request):
             const tg = window.Telegram.WebApp;
             tg.expand();
 
-            // Parallax 3D Card Interaction Mechanics
             const card = document.getElementById('main-card');
             document.addEventListener('mousemove', (e) => {
                 const xAxis = (window.innerWidth / 2 - e.pageX) / 25;
@@ -341,7 +338,6 @@ async def frontend_mini_app_dashboard(request):
                     const userProfile = await res.json();
                     document.getElementById('user-total-xp').innerText = `${userProfile.xp}.00 XP`;
                     
-                    // Render Perforated Voucher Coupons
                     const container = document.getElementById('calendar-box');
                     container.innerHTML = '';
                     for (let d = 1; d <= 24; d++) {
@@ -353,7 +349,6 @@ async def frontend_mini_app_dashboard(request):
                         container.appendChild(coupon);
                     }
 
-                    // Render Desk Rankings Leaderboard
                     const lbRes = await fetch('/api/leaderboard');
                     const lbData = await lbRes.json();
                     const lbContainer = document.getElementById('leaderboard-box');
@@ -391,6 +386,9 @@ async def frontend_mini_app_dashboard(request):
     """
     return web.Response(text=html_content, content_type="text/html")
 
+# ==========================================
+# 6. SERVER & POLLING CONFIGURATION
+# ==========================================
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", frontend_mini_app_dashboard)
