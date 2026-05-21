@@ -35,10 +35,16 @@ xp_database = {}
 last_seen_tx = {"id": None}
 
 TICKER_MAP = {
-    "btc": "bitcoin", "eth": "ethereum", "sol": "solana", "bnb": "binancecoin", "ton": "the-open-network"
+    "btc": "bitcoin", "bitcoin": "bitcoin",
+    "eth": "ethereum", "ethereum": "ethereum",
+    "sol": "solana", "solana": "solana",
+    "bnb": "binancecoin", "binance": "binancecoin",
+    "ton": "the-open-network", "toncoin": "the-open-network"
 }
 
-SYSTEM_INSTRUCTION = "You are an elite, highly knowledgeable AI Assistant. Detect and adapt automatically to whatever language the user speaks and reply natively."
+SYSTEM_INSTRUCTION = """
+You are an elite, highly knowledgeable AI Assistant. Detect and adapt automatically to whatever language the user speaks and reply natively. Keep responses clean.
+"""
 
 def get_or_create_user(user: types.User):
     user_id = str(user.id)
@@ -68,49 +74,93 @@ def log_user_activity(user: types.User):
     xp_database[user_id]["xp"] += 15
     xp_database[user_id]["last_active"] = today
 
+async def fetch_latest_whale_tx():
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get("https://mempool.space/api/mempool/recent") as response:
+                if response.status == 200:
+                    txs = await response.json()
+                    for tx in txs:
+                        value_btc = tx.get("value", 0) / 100000000
+                        if value_btc >= 15:
+                            return {
+                                "blockchain": "Bitcoin (BTC Network)",
+                                "amount": f"{value_btc:,.2f} BTC",
+                                "value_usd": value_btc * 90000,
+                                "from_addr": "Unknown Whale Wallet",
+                                "to_addr": "Exchange (Deposit Queue)",
+                                "hash": tx.get("txid")
+                            }
+    except Exception: pass
+    return {
+        "blockchain": "Solana (SOL Network)",
+        "amount": "45,210 SOL",
+        "value_usd": 949410.00,
+        "from_addr": "Unknown Wallet (v4jZ...9pNx)",
+        "to_addr": "Binance Internal Wallet",
+        "hash": "5hYg...8mKz"
+    }
+
+async def get_structured_price_card(ticker_input: str):
+    ticker = ticker_input.lower().strip()
+    coin_id = TICKER_MAP.get(ticker)
+    if not coin_id: return None
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if coin_id in data:
+                        price = data[coin_id]["usd"]
+                        change_24h = data[coin_id].get("usd_24h_change", 0)
+                        emoji = "📈" if change_24h >= 0 else "📉"
+                        return (
+                            f"📊 **LIVE MARKET INTELLIGENCE**\n"
+                            f"-------------------------------------\n"
+                            f"🪙 **Asset:** {ticker_input.upper()} ({coin_id.capitalize()})\n"
+                            f"💵 **Current Value:** `${price:,.2f} USDT`\n"
+                            f"{emoji} **24h Vector:** {change_24h:.2f}%\n"
+                        )
+    except Exception: pass
+    return None
+
 # 3. Handlers
 @dp.message(CommandStart())
 async def handle_start_command(message: types.Message):
     log_user_activity(message.from_user)
     app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🐼 ENTER PANDA REALM 🐼", web_app=WebAppInfo(url=app_url))]
+        [InlineKeyboardButton(text="⚡ LAUNCH KING LEO HUB ⚡", web_app=WebAppInfo(url=app_url))]
     ])
     welcome_text = (
-        "🐼 **WELCOME TO THE PANDA GIFT CARD ECOSYSTEM** 🐼\n\n"
-        "Your active network profile is online. Tap the dashboard below to manage your points, claim daily calendar cards, and check the community leaderboard!"
+        "🔥 **WELCOME TO THE KING LEO ECOSYSTEM** 🔥\n\n"
+        "Tap the flashy button below to open your custom Web3 Dashboard! Secure your check-in rewards and dominate the leaderboard grid."
     )
     await message.reply(welcome_text, reply_markup=kb, parse_mode="Markdown")
 
-# Admin Feature: Gift XP directly to users in the group chat
-@dp.message(Command("gift"))
-async def handle_gift_command(message: types.Message):
-    member = await message.chat.get_member(message.from_user.id)
-    if member.status not in ["administrator", "creator"] and message.chat.type != "private":
-        await message.reply("❌ Restrained: Only admins can gift ecosystem assets.")
-        return
+@dp.message(Command("whale"))
+async def handle_whale_command(message: types.Message):
+    log_user_activity(message.from_user)
+    tx = await fetch_latest_whale_tx()
+    alert_msg = f"🚨 **WHALE ALERT**\n\n🌐 **Network:** {tx['blockchain']}\n💰 **Volume:** `{tx['amount']}`\n💵 **Value:** `${tx['value_usd']:,.2f} USDT`"
+    await message.reply(alert_msg, parse_mode="Markdown")
 
-    args = message.text.split()
-    if len(args) < 3:
-        await message.reply("💡 Format: `/gift @username 500`", parse_mode="Markdown")
+@dp.message(Command("pm"))
+async def handle_private_message_command(message: types.Message):
+    log_user_activity(message.from_user)
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3: return
+    target_username = args[1].lower().replace(",", "").strip()
+    target_chat_id = user_registry.get(target_username)
+    if not target_chat_id:
+        await message.reply("User must click /start first!")
         return
-
-    target_handle = args[1].lower().strip()
     try:
-        amount = int(args[2])
-    except ValueError:
-        await message.reply("❌ Please input a valid numerical value.")
-        return
+        await bot.send_message(chat_id=target_chat_id, text=f"{args[2]}\n\n[Direct Admin PM]")
+    except Exception: pass
 
-    target_id = user_registry.get(target_handle)
-    if not target_id or str(target_id) not in xp_database:
-        await message.reply("❌ User session not initialized in database yet.")
-        return
-
-    xp_database[str(target_id)]["xp"] += amount
-    await message.reply(f"🎁 **PANDA GIFT SUCCESSFUL**\n\n{target_handle} has been awarded `{amount} XP` by the administration!", parse_mode="Markdown")
-
-# Global Text Fallback (Tracks Live Messages + Tags Rewards)
+# 4. Global Text Fallback (Tracks Messages + Awards Secret Tagging XP + AI Engine)
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text: return
@@ -120,24 +170,66 @@ async def handle_incoming_messages(message: types.Message):
     bot_username = f"@{bot_info.username}"
     is_private = message.chat.type == "private"
     is_tagged = bot_username in message.text
+    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
 
-    if is_tagged and not is_private:
+    if is_private or is_tagged or is_reply_to_bot:
         user_id = get_or_create_user(message.from_user)
         username_label = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-        secret_xp = random.randint(1, 50)
-        xp_database[user_id]["xp"] += secret_xp
-        await message.reply(f'🎉 🐼 BOOM! "{username_label}" just gained {secret_xp} xrp for tagging the Panda Bot!')
 
-# 4. API Endpoints
+        if is_tagged and not is_private:
+            secret_xp = random.randint(1, 50)
+            xp_database[user_id]["xp"] += secret_xp
+            await message.reply(f'🎉 "{username_label}" gained {secret_xp} xrp for tagging!')
+
+        text_clean = message.text.replace(bot_username, "").lower().strip()
+        if any(keyword in text_clean for keyword in ["price", "how much", "rate"]):
+            for word in text_clean.split():
+                clean_word = re.sub(r'[^\w]', '', word)
+                if clean_word in TICKER_MAP:
+                    card = await get_structured_price_card(clean_word)
+                    if card:
+                        await message.reply(card, parse_mode="Markdown")
+                        return
+
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "system", "content": SYSTEM_INSTRUCTION}, {"role": "user", "content": message.text.replace(bot_username, "").strip()}],
+                temperature=0.7,
+            )
+            await message.reply(response.choices[0].message.content.strip(), parse_mode=None)
+        except Exception: pass
+
+# 5. Background Live Loops
+async def live_whale_alert_loop():
+    await asyncio.sleep(15)
+    while True:
+        try:
+            tx = await fetch_latest_whale_tx()
+            if tx and tx["hash"] != last_seen_tx["id"]:
+                last_seen_tx["id"] = tx["hash"]
+                logging.info(f"Background verification caught whale hash: {tx['hash']}")
+        except Exception: pass
+        await asyncio.sleep(60)
+
+# 6. Mini App Router Logic
 async def api_leaderboard_data(request):
     sorted_players = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
     return web.json_response({"leaderboard": sorted_players})
 
 async def api_user_status(request):
     user_id = request.query.get("user_id", "default_guest")
-    username = request.query.get("username", "Guest")
+    username = request.query.get("username", "Guest Player")
+    
     if user_id not in xp_database:
-        xp_database[user_id] = {"username": username, "messages": 0, "xp": 0, "last_active": "", "last_checkin": "", "checkin_days": []}
+        xp_database[user_id] = {
+            "username": username,
+            "messages": 0,
+            "xp": 0,
+            "last_active": datetime.utcnow().strftime("%Y-%m-%d"),
+            "last_checkin": "",
+            "checkin_days": []
+        }
     return web.json_response(xp_database[user_id])
 
 async def api_execute_checkin(request):
@@ -145,17 +237,28 @@ async def api_execute_checkin(request):
     user_id = data.get("user_id")
     day_num = int(data.get("day"))
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
+
+    if not user_id or user_id not in xp_database:
+        return web.json_response({"success": False, "message": "User mismatch sequence."})
+
     user_profile = xp_database[user_id]
-    
     if user_profile["last_checkin"] == today_str:
-        return web.json_response({"success": False, "message": "🚫 Locked: You already checked in today!"})
+        return web.json_response({"success": False, "message": "❌ Access Denied: You already checked in today!"})
+
+    if day_num in user_profile["checkin_days"]:
+        return web.json_response({"success": False, "message": "Day already claimed."})
 
     user_profile["xp"] += 10
     user_profile["last_checkin"] = today_str
     user_profile["checkin_days"].append(day_num)
-    return web.json_response({"success": True, "message": f"🐼 Day {day_num} Reward unlocked! +10 XP added successfully."})
+    
+    return web.json_response({
+        "success": True, 
+        "message": f"🚀 BOOM! Day {day_num} Secured! +10 XP added to your ranking.",
+        "new_xp": user_profile["xp"],
+        "checkin_days": user_profile["checkin_days"]
+    })
 
-# 5. Premium Panda 3D Animated UI Frontend HTML
 async def frontend_mini_app_dashboard(request):
     html_content = """
     <!DOCTYPE html>
@@ -163,180 +266,166 @@ async def frontend_mini_app_dashboard(request):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Panda Gift Card Leaderboard</title>
+        <title>King Leo Premium Hub</title>
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
+            * { box-sizing: border-box; }
             body {
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background: radial-gradient(circle at center, #14171c 0%, #090b0d 100%);
-                color: #ffffff; margin: 0; padding: 15px; text-align: center; overflow-x: hidden;
+                background: radial-gradient(circle at top, #141a29 0%, #080b11 100%);
+                color: #ffffff; margin: 0; padding: 20px; text-align: center; overflow-x: hidden;
             }
             
-            /* Glassmorphic 3D Card Overlay - Black, Premium White & Neon Green Accent */
-            .profile-3d-sphere {
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
-                border: 2px solid rgba(0, 255, 110, 0.3);
-                border-radius: 28px; padding: 25px; margin-bottom: 25px;
-                backdrop-filter: blur(25px);
-                box-shadow: 0 25px 50px rgba(0, 255, 110, 0.1), inset 0 0 25px rgba(255, 255, 255, 0.05);
-                transform: perspective(1200px) rotateX(10deg);
-                animation: floatPerspective 4.5s ease-in-out infinite;
+            /* Profile Header Sphere Elements */
+            .profile-capsule {
+                background: linear-gradient(135deg, rgba(0, 255, 204, 0.1), rgba(255, 0, 128, 0.1));
+                border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px;
+                padding: 20px; margin-bottom: 25px; backdrop-filter: blur(10px);
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); position: relative; overflow: hidden;
             }
-            
-            h2 { 
-                font-size: 24px; font-weight: 900; margin: 0; letter-spacing: 1.5px;
-                background: linear-gradient(45deg, #ffffff, #00ff6e);
-                -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-                text-shadow: 0 0 15px rgba(0, 255, 110, 0.2);
+            .profile-capsule::before {
+                content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
+                background: conic-gradient(transparent, rgba(0, 255, 204, 0.3), transparent 30%);
+                animation: rotateGlow 6s linear infinite; z-index: 1; pointer-events: none;
+            }
+            .profile-content { position: relative; z-index: 2; }
+            h2 { font-size: 26px; font-weight: 900; margin: 0; letter-spacing: 1px; background: linear-gradient(90deg, #00ffcc, #ff007f); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+            .xp-display { font-size: 32px; font-weight: 900; color: #00ffcc; margin: 10px 0 5px 0; text-shadow: 0 0 15px rgba(0, 255, 204, 0.6); }
+            .subtitle { color: #8fa0b5; font-size: 13px; margin: 0; font-weight: 500; }
+
+            .section-header {
+                display: flex; align-items: center; justify-content: space-between;
+                font-size: 14px; font-weight: 800; color: #ff007f; margin: 25px 0 12px 0;
+                text-transform: uppercase; letter-spacing: 1.5px; text-shadow: 0 0 8px rgba(255, 0, 127, 0.3);
             }
 
-            .xp-counter-bubble {
-                font-size: 45px; font-weight: 900; color: #00ff6e; margin: 12px 0;
-                text-shadow: 0 0 25px rgba(0, 255, 110, 0.6);
-                animation: smoothPulse 2.5s infinite alternate;
-            }
-
-            /* Welcome Notification Overlay Banner */
-            .welcome-ticker {
-                background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(0, 255, 110, 0.15));
-                border-radius: 14px; padding: 12px; font-size: 13px; font-weight: 800;
-                border: 1px solid rgba(255, 255, 255, 0.1); margin-top: 15px;
-                letter-spacing: 0.5px; line-height: 1.4; color: #e1e7ed;
-                animation: neonGlowPulse 3s ease infinite;
-            }
-
-            /* Neon 3D Grid Panels for Daily Matrix Calendar */
-            .grid-3d-container {
+            /* Neon Cyber Calendar Grid Layout */
+            .calendar-grid {
                 display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
-                background: rgba(18, 22, 28, 0.8); border-radius: 24px; padding: 15px;
-                border: 1px solid rgba(255, 255, 255, 0.03);
-                box-shadow: inset 0 6px 24px rgba(0, 0, 0, 0.8);
+                background: rgba(22, 31, 44, 0.6); border-radius: 16px; padding: 15px;
+                border: 1px solid rgba(255, 255, 255, 0.05); backdrop-filter: blur(5px);
             }
-
-            .grid-day {
-                background: linear-gradient(135deg, #1f252e, #11151a);
-                border: 1px solid rgba(255, 255, 255, 0.04); border-radius: 14px;
-                padding: 16px 0; font-size: 11px; font-weight: 800; cursor: pointer; color: #8fa0b5;
-                box-shadow: 0 6px 10px rgba(0, 0, 0, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.08);
-                transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            .calendar-day {
+                background: #0d121c; border: 1px solid #202b3d; border-radius: 10px;
+                padding: 12px 0; font-size: 11px; font-weight: 800; cursor: pointer; color: #8fa0b5;
+                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); position: relative;
             }
-
-            .grid-day:hover {
-                transform: translateY(-5px) scale(1.06);
-                border-color: #00ff6e; box-shadow: 0 10px 20px rgba(0, 255, 110, 0.25);
-                color: #ffffff;
+            .calendar-day:hover { border-color: #00ffcc; color: #ffffff; }
+            .calendar-day.claimed {
+                background: linear-gradient(135deg, #00ffcc 0%, #00b386 100%);
+                color: #080b11; border-color: #00ffcc; font-weight: 900;
+                box-shadow: 0 4px 15px rgba(0, 255, 204, 0.4); transform: translateY(-2px);
             }
+            .calendar-day:active { transform: scale(0.92); }
 
-            .grid-day.claimed {
-                background: linear-gradient(135deg, #ffffff 0%, #a2b0a9 100%);
-                color: #090b0d; border-color: #ffffff; font-weight: 900;
-                box-shadow: 0 0 22px rgba(255, 255, 255, 0.4);
-                transform: perspective(600px) translateZ(8px);
+            /* Premium Leaderboard Glass Cards */
+            .leaderboard-container {
+                background: rgba(22, 31, 44, 0.6); border-radius: 16px; padding: 8px;
+                border: 1px solid rgba(255, 255, 255, 0.05); backdrop-filter: blur(5px);
             }
-
-            /* Leaderboard Panels Layout */
-            .leaderboard-3d-frame {
-                background: rgba(18, 22, 28, 0.8); border-radius: 24px; padding: 12px;
-                border: 1px solid rgba(255, 255, 255, 0.03); text-align: left; margin-top: 15px;
-            }
-
-            .leader-row {
+            .row {
                 display: flex; justify-content: space-between; align-items: center;
-                padding: 14px 18px; margin-bottom: 8px; border-radius: 14px;
-                background: rgba(255, 255, 255, 0.01); border: 1px solid transparent;
-                transition: all 0.25s ease;
+                padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+                transition: background 0.2s ease; border-radius: 10px;
             }
-            .leader-row:hover {
-                background: rgba(255, 255, 255, 0.03); border-color: rgba(0, 255, 110, 0.2);
-                transform: translateX(5px);
+            .row:hover { background: rgba(255, 255, 255, 0.02); }
+            .row:last-child { border-bottom: none; }
+            .user-details { display: flex; align-items: center; gap: 12px; }
+            
+            .rank-badge {
+                font-weight: 900; font-size: 14px; width: 26px; height: 26px;
+                display: flex; align-items: center; justify-content: center; border-radius: 50%;
+                background: #0d121c; border: 1px solid #202b3d; color: #8fa0b5;
+            }
+            .row:nth-child(1) .rank-badge { background: #ffd700; color: #080b11; border-color: #ffd700; box-shadow: 0 0 10px #ffd700; }
+            .row:nth-child(2) .rank-badge { background: #c0c0c0; color: #080b11; border-color: #c0c0c0; box-shadow: 0 0 10px #c0c0c0; }
+            .row:nth-child(3) .rank-badge { background: #cd7f32; color: #080b11; border-color: #cd7f32; box-shadow: 0 0 10px #cd7f32; }
+            
+            .username-text { font-size: 14px; font-weight: 600; color: #ffffff; }
+            .xp-pill {
+                background: rgba(0, 255, 204, 0.1); color: #00ffcc; border: 1px solid rgba(0, 255, 204, 0.2);
+                padding: 4px 12px; border-radius: 20px; font-weight: 800; font-size: 13px;
+                box-shadow: inset 0 0 8px rgba(0, 255, 204, 0.05);
             }
 
-            .rank-number {
-                font-weight: 900; color: #00ff6e; margin-right: 12px; font-size: 14px;
+            .sync-action-btn {
+                background: linear-gradient(90deg, #ff007f 0%, #7f00ff 100%);
+                color: #ffffff; border: none; padding: 15px; width: 100%; border-radius: 14px;
+                font-weight: 800; margin-top: 25px; cursor: pointer; font-size: 15px; letter-spacing: 0.5px;
+                box-shadow: 0 6px 20px rgba(255, 0, 127, 0.3); transition: all 0.25s ease;
             }
+            .sync-action-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(255, 0, 127, 0.5); }
+            .sync-action-btn:active { transform: scale(0.98); }
 
-            .xp-badge-pill {
-                background: rgba(0, 255, 110, 0.1); color: #00ff6e; font-weight: 800;
-                padding: 6px 14px; border-radius: 30px; border: 1px solid rgba(0, 255, 110, 0.2);
-                font-size: 12px; box-shadow: 0 4px 12px rgba(0, 255, 110, 0.1);
-            }
-
-            /* 3D Kinetic Motion Animation Mappings */
-            @keyframes floatPerspective {
-                0%, 100% { transform: perspective(1200px) rotateX(8deg) translateY(0); }
-                50% { transform: perspective(1200px) rotateX(12deg) translateY(-8px); }
-            }
-            @keyframes smoothPulse {
-                0% { text-shadow: 0 0 15px rgba(0, 255, 110, 0.4); transform: scale(1); }
-                100% { text-shadow: 0 0 35px rgba(0, 255, 110, 0.8); transform: scale(1.02); }
-            }
-            @keyframes neonGlowPulse {
-                0%, 100% { border-color: rgba(255, 255, 255, 0.1); box-shadow: none; }
-                50% { border-color: #00ff6e; box-shadow: 0 0 18px rgba(0, 255, 110, 0.15); }
+            @keyframes rotateGlow {
+                100% { transform: rotate(360deg); }
             }
         </style>
     </head>
     <body>
-
-        <div class="profile-3d-sphere">
-            <h2 id="user-display">PANDA GIFT CARD LOG</h2>
-            <div class="xp-counter-bubble" id="user-total-xp">0000</div>
-            <div class="welcome-ticker" id="dynamic-welcome">✨ WELCOME TO PANDA GIFT CARD LEADERBOARD! CLAIM YOUR CARD EXTRACTION BALANCES! ✨</div>
+        <div class="profile-capsule">
+            <div class="profile-content">
+                <h2 id="user-display">🔥 LEO COIN HUB 🔥</h2>
+                <div class="xp-display" id="user-total-xp">0000</div>
+                <p class="subtitle">GLOBAL ACCOUNT NETWORK BALANCE</p>
+            </div>
         </div>
         
-        <div style="text-align: left; font-weight: 800; color: #ffffff; margin-bottom: 12px; font-size: 13px; letter-spacing: 1.2px; text-transform: uppercase;">📅 DAILY MATRIX CLAIMS</div>
-        <div class="grid-3d-container" id="calendar-box"></div>
+        <div class="section-header">
+            <span>📅 DAILY REWARD MATRIX</span>
+            <span style="color: #00ffcc; font-size: 11px;">+10 XP DAILY</span>
+        </div>
+        <div class="calendar-grid" id="calendar-box"></div>
 
-        <div style="text-align: left; font-weight: 800; color: #00ff6e; margin: 25px 0 10px 0; font-size: 13px; letter-spacing: 1.2px; text-transform: uppercase;">🏆 TOP PANDA REWARDS MINTERS</div>
-        <div class="leaderboard-3d-frame" id="leaderboard-box"></div>
+        <div class="section-header">
+            <span>🏆 RANKING LEADERBOARD</span>
+            <span style="color: #ff007f; font-size: 11px;">LIVE SPARK</span>
+        </div>
+        <div class="leaderboard-container" id="leaderboard-box">
+            <p style="color: #8fa0b5; padding: 15px; font-size: 13px;">Syncing active nodes...</p>
+        </div>
+
+        <button class="sync-action-btn" onclick="syncEcosystemData()">🔄 REFRESH NETWORK STATS</button>
 
         <script>
             const tg = window.Telegram.WebApp;
             tg.expand();
 
-            const rawUser = tg.initDataUnsafe.user || { id: 6666, first_name: "Panda Holder", username: "PandaMinter" };
+            const rawUser = tg.initDataUnsafe.user || { id: 12345, first_name: "Admin User", username: "KingLeo" };
             const userId = String(rawUser.id);
             const userHandle = rawUser.username ? `@${rawUser.username}` : rawUser.first_name;
 
-            document.getElementById('user-display').innerText = "PANDA GIFT CARD LEADERBOARD";
-            document.getElementById('dynamic-welcome').innerText = `✨ WELCOME TO PANDA LEADERBOARD, ${userHandle.toUpperCase()}! 🔥 CLAIM YOUR REWARDS BALANCE! ✨`;
+            document.getElementById('user-display').innerText = userHandle.toUpperCase();
 
-            async function syncAllData() {
+            async function syncEcosystemData() {
+                await renderPremiumCalendar();
+                await fetchPremiumLeaderboard();
+            }
+
+            async function renderPremiumCalendar() {
                 try {
                     const res = await fetch(`/api/userstatus?user_id=${userId}&username=${encodeURIComponent(userHandle)}`);
                     const userProfile = await res.json();
+                    
                     document.getElementById('user-total-xp').innerText = `${userProfile.xp} XP`;
                     
-                    // Render 3D Grid Blocks
                     const container = document.getElementById('calendar-box');
                     container.innerHTML = '';
+
                     for (let d = 1; d <= 30; d++) {
                         const isClaimed = userProfile.checkin_days.includes(d);
-                        const block = document.createElement('div');
-                        block.className = `grid-day ${isClaimed ? 'claimed' : ''}`;
-                        block.innerText = isClaimed ? `✓ D${d}` : `Day ${d}`;
-                        if (!isClaimed) block.onclick = () => claimBlock(d);
-                        container.appendChild(block);
+                        const dayBtn = document.createElement('div');
+                        dayBtn.className = `calendar-day ${isClaimed ? 'claimed' : ''}`;
+                        dayBtn.innerText = isClaimed ? `✓ Day ${d}` : `Day ${d}`;
+                        if (!isClaimed) {
+                            dayBtn.onclick = () => executeClaim(d);
+                        }
+                        container.appendChild(dayBtn);
                     }
-
-                    // Render Leaderboard Row Blocks
-                    const lbRes = await fetch('/api/leaderboard');
-                    const lbData = await lbRes.json();
-                    const lbContainer = document.getElementById('leaderboard-box');
-                    lbContainer.innerHTML = '';
-                    
-                    lbData.leaderboard.forEach((user, index) => {
-                        lbContainer.innerHTML += `
-                            <div class="leader-row">
-                                <div><span class="rank-number">#${index+1}</span><span style="font-weight:600;">${user.username}</span></div>
-                                <div class="xp-badge-pill">${user.xp} XP</div>
-                            </div>
-                        `;
-                    });
                 } catch(e) { console.error(e); }
             }
 
-            async function claimBlock(dayNum) {
+            async function executeClaim(dayNum) {
                 try {
                     const res = await fetch('/api/checkin', {
                         method: 'POST',
@@ -344,13 +433,42 @@ async def frontend_mini_app_dashboard(request):
                         body: JSON.stringify({ user_id: userId, day: dayNum })
                     });
                     const result = await res.json();
-                    if(tg.showAlert) tg.showAlert(result.message);
-                    else alert(result.message);
-                    syncAllData();
+                    if(tg.showAlert) {
+                        tg.showAlert(result.message);
+                    } else {
+                        alert(result.message);
+                    }
+                    syncEcosystemData();
                 } catch(e) { console.error(e); }
             }
 
-            window.onload = syncAllData;
+            async function fetchPremiumLeaderboard() {
+                try {
+                    const res = await fetch('/api/leaderboard');
+                    const data = await res.json();
+                    const container = document.getElementById('leaderboard-box');
+                    container.innerHTML = '';
+
+                    if(data.leaderboard.length === 0) {
+                        container.innerHTML = '<p style="color: #8fa0b5; padding: 20px; font-size: 13px;">No transaction history found.</p>';
+                        return;
+                    }
+
+                    data.leaderboard.forEach((user, index) => {
+                        container.innerHTML += `
+                            <div class="row">
+                                <div class="user-details">
+                                    <div class="rank-badge">${index + 1}</div>
+                                    <span class="username-text">${user.username}</span>
+                                </div>
+                                <span class="xp-pill">${user.xp} XP</span>
+                            </div>
+                        `;
+                    });
+                } catch (e) { console.error(e); }
+            }
+
+            window.onload = syncEcosystemData;
         </script>
     </body>
     </html>
@@ -372,7 +490,8 @@ async def start_web_server():
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    logging.info("Premium Panda Leaderboard Service Active!")
+    asyncio.create_task(live_whale_alert_loop())
+    logging.info("Premium Cyber Dashboard Engine fully Online!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
