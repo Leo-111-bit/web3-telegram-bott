@@ -136,54 +136,160 @@ async def frontend_mini_app_dashboard(request):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>PD Card</title>
+        <title>PD Card Pro</title>
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
-            body { font-family: sans-serif; background: #08070d; color: white; margin: 0; padding: 20px; text-align: center; }
-            .giftcard-3d-frame { background: linear-gradient(135deg, #1e1b36, #0f0c1c); border: 2px solid #a855f7; border-radius: 20px; padding: 25px; margin-bottom: 25px; }
-            .brand-logo-text { font-size: 26px; font-weight: 900; background: linear-gradient(90deg, #a855f7, #f43f5e); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-            .voucher-balance-display { font-size: 45px; font-weight: 900; margin: 15px 0; font-family: monospace; }
-            .feature-section-panel { background: #151224; border-radius: 18px; padding: 20px; margin-bottom: 25px; text-align: left; }
-            .section-header-title { font-weight: 800; color: #a855f7; margin-bottom: 15px; text-transform: uppercase; }
-            .calc-input-box { width: 100%; padding: 12px; background: #1e1b36; border: 1px solid #a855f7; border-radius: 10px; color: white; margin-bottom: 10px; box-sizing: border-box; }
-            .calc-output-payout { padding: 15px; border-radius: 10px; text-align: center; font-size: 20px; font-weight: 900; color: #f43f5e; border: 1px solid #f43f5e; }
-            .wheel-spinner-canvas { width: 200px; height: 200px; border-radius: 50%; border: 6px solid #a855f7; background: conic-gradient(#1e1b36 0deg 60deg, #f43f5e 60deg 120deg, #2e2a54 120deg 180deg, #a855f7 180deg 240deg, #121024 240deg 300deg, #ec4899 300deg 360deg); margin: 15px auto; transition: transform 4s ease-out; }
-            .spin-trigger-btn { width: 100%; background: #a855f7; border: none; padding: 15px; border-radius: 12px; color: white; font-weight: 900; cursor: pointer; }
-            .voucher-grid-matrix { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-            .voucher-ticket { background: #1e1b36; padding: 10px; border-radius: 8px; font-size: 10px; cursor: pointer; border: 1px solid #333; }
-            .voucher-ticket.redeemed { background: #f43f5e; }
-            .leader-desk-row { display: flex; justify-content: space-between; padding: 10px; background: #1e1b36; margin-bottom: 5px; border-radius: 8px; }
+            :root {
+                --bg: #0f172a;
+                --card-bg: rgba(30, 41, 59, 0.7);
+                --accent: #8b5cf6;
+                --accent-hover: #7c3aed;
+                --text: #f8fafc;
+                --text-muted: #94a3b8;
+                --glass: rgba(255, 255, 255, 0.05);
+            }
+            body {
+                font-family: 'Inter', -apple-system, sans-serif;
+                background: var(--bg);
+                color: var(--text);
+                margin: 0;
+                padding: 20px;
+                background-image: radial-gradient(circle at top right, #1e1b4b, transparent), radial-gradient(circle at bottom left, #4c0519, transparent);
+                min-height: 100vh;
+            }
+            .glass-card {
+                background: var(--card-bg);
+                backdrop-filter: blur(12px);
+                border: 1px solid var(--glass);
+                border-radius: 24px;
+                padding: 24px;
+                margin-bottom: 20px;
+                box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3);
+            }
+            .brand-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+            .balance-text { font-size: 32px; font-weight: 800; color: #fff; margin: 10px 0; letter-spacing: -1px; }
+            
+            /* Calculator Styles */
+            select, input { width: 100%; background: rgba(0,0,0,0.2); border: 1px solid var(--glass); padding: 14px; border-radius: 12px; color: white; margin: 10px 0; font-size: 16px; }
+            
+            /* Horizontal Panda Slider */
+            .slider-container {
+                display: flex;
+                overflow-x: auto;
+                gap: 15px;
+                padding: 10px 0;
+                scroll-behavior: smooth;
+                scrollbar-width: none;
+            }
+            .slider-container::-webkit-scrollbar { display: none; }
+            .panda-slide {
+                min-width: 120px;
+                height: 120px;
+                background: var(--glass);
+                border-radius: 20px;
+                border: 2px solid var(--accent);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 40px;
+                flex-shrink: 0;
+                transition: transform 0.3s;
+            }
+            .panda-slide:hover { transform: scale(1.05); }
+
+            /* Grid & List */
+            .grid-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+            .day-item { background: var(--glass); padding: 10px 0; border-radius: 8px; font-size: 11px; text-align: center; border: 1px solid rgba(255,255,255,0.05); cursor: pointer; }
+            .day-item.redeemed { background: var(--accent); color: white; }
+            
+            .leaderboard-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: var(--glass); border-radius: 12px; margin-bottom: 8px; }
         </style>
     </head>
     <body>
-        <div class="giftcard-3d-frame">
-            <div class="brand-logo-text">PD CARD</div>
-            <div class="voucher-balance-display" id="user-total-xp">00 XP</div>
-            <div id="user-display">TRADER</div>
+
+        <div class="glass-card">
+            <div class="brand-header">
+                <span style="font-weight: 800; color: var(--accent);">PD CARD PRO</span>
+                <span id="user-display" style="color: var(--text-muted); font-size: 12px;">@trader</span>
+            </div>
+            <div class="balance-text" id="user-total-xp">0.00 XP</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Current Wallet Balance</div>
         </div>
-        <div class="feature-section-panel">
-            <div class="section-header-title">📈 Live Rate Index</div>
-            <select class="calc-input-box" id="card-type" onchange="runCalculation()">
-                <option value="920">Apple - ₦920/$</option>
-                <option value="950">Razer - ₦950/$</option>
+
+        <div class="glass-card">
+            <h3 style="margin-top:0; font-size: 14px; color: var(--text-muted);">30-DAY PANDA GALLERY</h3>
+            <div class="slider-container" id="panda-slider">
+                </div>
+        </div>
+
+        <div class="glass-card">
+            <h3 style="margin-top:0; font-size: 14px; color: var(--text-muted);">RATE CALCULATOR</h3>
+            <select id="card-type" onchange="runCalculation()">
+                <option value="920">Apple iTunes - ₦920/$</option>
+                <option value="950">Razer Gold - ₦950/$</option>
             </select>
-            <input type="number" class="calc-input-box" id="card-amount" value="100" oninput="runCalculation()">
-            <div class="calc-output-payout" id="payout-payout">ESTIMATED PAYOUT: ₦92,000</div>
+            <input type="number" id="card-amount" value="100" oninput="runCalculation()">
+            <div id="payout-payout" style="font-size: 24px; font-weight: 800; color: #22c55e; margin-top: 10px;">₦92,000</div>
         </div>
-        <div class="feature-section-panel">
-            <div class="section-header-title">🎡 Lucky Panda Wheel</div>
-            <div class="wheel-spinner-canvas" id="spin-wheel"></div>
-            <button class="spin-trigger-btn" onclick="executeLuckySpin()">SPIN</button>
+
+        <div class="glass-card">
+            <h3 style="font-size: 14px; color: var(--text-muted);">CHECK-IN ALLOCATION</h3>
+            <div class="grid-container" id="calendar-box"></div>
         </div>
-        <div class="feature-section-panel">
-            <div class="section-header-title">🎫 30-Day Grid</div>
-            <div class="voucher-grid-matrix" id="calendar-box"></div>
-        </div>
-        <div class="feature-section-panel">
-            <div class="section-header-title">🏆 Leaderboard</div>
+
+        <div class="glass-card">
+            <h3 style="font-size: 14px; color: var(--text-muted);">GLOBAL RANKINGS</h3>
             <div id="leaderboard-box"></div>
         </div>
+
         <script>
+            const tg = window.Telegram.WebApp; tg.expand();
+            const rawUser = tg.initDataUnsafe.user || { id: 7777, first_name: "Trader" };
+            const userId = String(rawUser.id);
+            let userHandle = rawUser.username ? `@${rawUser.username}` : (rawUser.first_name || "Trader");
+            document.getElementById('user-display').innerText = userHandle;
+
+            // Generate Slideshow
+            const slider = document.getElementById('panda-slider');
+            for(let i=1; i<=30; i++) {
+                slider.innerHTML += `<div class="panda-slide">🐼</div>`;
+            }
+
+            function runCalculation() {
+                const rate = parseFloat(document.getElementById('card-type').value);
+                const amt = parseFloat(document.getElementById('card-amount').value) || 0;
+                document.getElementById('payout-payout').innerText = `₦${(rate*amt).toLocaleString()}`;
+            }
+
+            async function syncAllData() {
+                const [statusRes, lbRes] = await Promise.all([
+                    fetch(`/api/userstatus?user_id=${userId}&username=${encodeURIComponent(userHandle)}`),
+                    fetch('/api/leaderboard')
+                ]);
+                const user = await statusRes.json();
+                const lb = await lbRes.json();
+                document.getElementById('user-total-xp').innerText = `${user.xp} XP`;
+                
+                const cal = document.getElementById('calendar-box'); cal.innerHTML = '';
+                for(let i=1; i<=30; i++) {
+                    const isClaimed = user.checkin_days.includes(i);
+                    cal.innerHTML += `<div class="day-item ${isClaimed ? 'redeemed' : ''}" onclick="claimCoupon(${i})">D${i}</div>`;
+                }
+                const lbBox = document.getElementById('leaderboard-box'); lbBox.innerHTML = '';
+                lb.leaderboard.forEach((u, i) => lbBox.innerHTML += `<div class="leaderboard-item"><span>#${i+1} ${u.username}</span><span style="font-weight:700;">${u.xp} XP</span></div>`);
+            }
+
+            async function claimCoupon(day) {
+                const res = await fetch('/api/checkin', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ user_id: userId, day: day }) });
+                const r = await res.json(); alert(r.message); syncAllData();
+            }
+
+            window.onload = () => { syncAllData(); runCalculation(); };
+        </script>
+    </body>
+    </html>
+    """
+    return web.Response(text=html_content, content_type="text/html")
             const tg = window.Telegram.WebApp; tg.expand();
             const rawUser = tg.initDataUnsafe.user || { id: 7777, first_name: "Trader" };
             const userId = String(rawUser.id);
