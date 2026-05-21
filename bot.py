@@ -76,7 +76,7 @@ async def fetch_xrp_price():
         logging.error(f"Error fetching price: {e}")
     return "$1.3740", "+0.65%"
 
-# 3. Handlers
+# 3. Explicit Command Handlers
 @dp.message(CommandStart())
 async def handle_start_command(message: types.Message):
     log_user_activity(message.from_user)
@@ -84,10 +84,23 @@ async def handle_start_command(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡ LAUNCH PD REALM ⚡", web_app=WebAppInfo(url=app_url))]
     ])
-    welcome_text = (
-        "💳 **WELCOME TO THE PD CARD OFFICIAL TRACKER** 🐼\n\n"
-        "Your secure profile is live. Launch the dashboard app below to track live assets, manage points, and claim daily rewards!"
-    )
+    
+    # If used in a group chat, customize the welcome text to show live rates immediately
+    if message.chat.type != "private":
+        price_val, change_val = await fetch_xrp_price()
+        welcome_text = (
+            f"🐼 **Welcome to PD Card!** Check out our live prices below:\n\n"
+            f"🪙 **Asset:** XRP / USD\n"
+            f"💵 **Live Price:** `{price_val}`\n"
+            f"📊 **24H Trend:** `{change_val}`\n\n"
+            f"Tap the tracker dashboard link below to watch trades live!"
+        )
+    else:
+        welcome_text = (
+            "💳 **WELCOME TO THE PD CARD OFFICIAL TRACKER** 🐼\n\n"
+            "Your secure profile is live. Launch the dashboard app below to track live assets, manage points, and claim daily rewards!"
+        )
+        
     await message.reply(welcome_text, reply_markup=kb, parse_mode="Markdown")
 
 # Admin Feature: Gift XP directly to users in the chat
@@ -119,12 +132,11 @@ async def handle_gift_command(message: types.Message):
     xp_database[str(target_id)]["xp"] += amount
     await message.reply(f"🎁 **PD CARD BONUS GRANTED**\n\n{target_handle} has been awarded `{amount} XP` by the administration!", parse_mode="Markdown")
 
-# Universal Dynamic Messaging Engine (Repairs Group Tracking, Tag Actions, and Private DM AI Responses)
+# Universal Fixed Fallback Text Engine (Catches Tags and Raw Chats)
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text: return
     
-    # Track activity and log XP for all human messages regardless of chat location
     log_user_activity(message.from_user)
 
     bot_info = await bot.get_me()
@@ -132,7 +144,7 @@ async def handle_incoming_messages(message: types.Message):
     is_private = message.chat.type == "private"
     is_tagged = bot_username in message.text
 
-    # Scenario A: The bot is specifically tagged inside a public group chat
+    # Scenario A: User mentions or tags the bot in a group chat
     if not is_private and is_tagged:
         price_val, change_val = await fetch_xrp_price()
         app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
@@ -151,17 +163,13 @@ async def handle_incoming_messages(message: types.Message):
         await message.reply(tag_response, reply_markup=kb, parse_mode="Markdown")
         return
 
-    # Scenario B: Direct Private Message — Unleashes General AI Knowledge
+    # Scenario B: Direct Private Message — Groq AI Brain Engine
     if is_private:
-        # Prevent processing command paths as raw text prompts
-        if message.text.startswith("/"): return
-        
         try:
-            # Let the user know the AI engine is thinking
             await bot.send_chat_action(chat_id=message.chat.id, action="typing")
             
             completion = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="llama-3.3-70b-specdec", 
                 messages=[
                     {"role": "system", "content": SYSTEM_INSTRUCTION},
                     {"role": "user", "content": message.text}
@@ -172,12 +180,23 @@ async def handle_incoming_messages(message: types.Message):
             ai_response = completion.choices[0].message.content
             await message.reply(ai_response)
         except Exception as e:
-            logging.error(f"Groq Processing Failure: {e}")
-            await message.reply("⚙️ System undergoing heavy volume. Please prompt again in a moment!")
+            logging.error(f"Primary Groq Model Exception: {e}")
+            try:
+                # Direct immediate light fallback pipeline
+                completion = groq_client.chat.completions.create(
+                    model="llama3-8b-8192",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_INSTRUCTION},
+                        {"role": "user", "content": message.text}
+                    ],
+                    temperature=0.6,
+                    max_tokens=512
+                )
+                await message.reply(completion.choices[0].message.content)
+            except Exception as backup_err:
+                logging.error(f"Complete engine block: {backup_err}")
+                await message.reply("⚙️ Asset updates processing. Send your query once more!")
         return
-
-    # Scenario C: Normal group chatter (Not tagged)
-    # Passed quietly through without replying to keep groups clean while mining user activity XP records!
 
 # 4. API Endpoints
 async def api_leaderboard_data(request):
@@ -206,12 +225,11 @@ async def api_execute_checkin(request):
     user_profile["checkin_days"].append(day_num)
     return web.json_response({"success": True, "message": f"⚡ Day {day_num} Reward unlocked! +10 XP added successfully."})
 
-# Live Tracker API for Frontend Syncing
 async def api_live_ticker(request):
     p, c = await fetch_xrp_price()
     return web.json_response({"price": p, "change": c})
 
-# 5. Premium PD Card 3D Splash & Dashboard Frontend HTML
+# 5. Premium PD Card Frontend HTML Dashboard
 async def frontend_mini_app_dashboard(request):
     html_content = """
     <!DOCTYPE html>
@@ -255,10 +273,7 @@ async def frontend_mini_app_dashboard(request):
                 border: 1px solid rgba(0, 255, 110, 0.3);
             }
             
-            .splash-title {
-                font-size: 26px; font-weight: 900; color: #ffffff; letter-spacing: 2px;
-                margin-bottom: 6px; text-transform: uppercase;
-            }
+            .splash-title { font-size: 26px; font-weight: 900; color: #ffffff; letter-spacing: 2px; margin-bottom: 6px; text-transform: uppercase; }
             .splash-subtitle { color: #00ff6e; font-size: 13px; font-weight: bold; margin-bottom: 35px; letter-spacing: 1px; }
 
             .btn-enter {
@@ -266,7 +281,6 @@ async def frontend_mini_app_dashboard(request):
                 border-radius: 50px; font-weight: 900; font-size: 15px; cursor: pointer;
                 box-shadow: 0 0 25px rgba(0, 255, 110, 0.45); transition: 0.3s;
             }
-            .btn-enter:active { transform: scale(0.95); }
 
             #main-app { opacity: 0; transform: translateY(40px); transition: 0.7s ease; padding: 20px; overflow-y: auto; height: 100vh; }
 
@@ -276,7 +290,6 @@ async def frontend_mini_app_dashboard(request):
                 border-radius: 24px; padding: 22px; margin-bottom: 22px;
                 backdrop-filter: blur(15px); box-shadow: 0 20px 40px rgba(0,0,0,0.5);
             }
-            h2 { color: #ffffff; font-size: 20px; font-weight: 900; margin: 0; letter-spacing: 1px; }
             .xp-val { font-size: 42px; font-weight: 900; color: #00ff6e; text-shadow: 0 0 20px rgba(0,255,110,0.4); margin: 8px 0; }
             
             .live-crypto-bar {
@@ -293,9 +306,7 @@ async def frontend_mini_app_dashboard(request):
             .day-box {
                 background: #12161f; border-radius: 12px; padding: 16px 0; font-size: 11px;
                 font-weight: bold; color: #7e91a8; border: 1px solid transparent; cursor: pointer;
-                transition: 0.2s;
             }
-            .day-box:hover { border-color: #00ff6e; }
             .day-box.claimed { background: linear-gradient(135deg, #00ff6e, #00b34d); color: #000; font-weight:900; box-shadow: 0 0 15px rgba(0,255,110,0.3); }
 
             .leaderboard { background: rgba(255,255,255,0.01); border-radius: 20px; padding: 10px; margin-top: 20px; text-align: left; border: 1px solid rgba(255,255,255,0.03); }
@@ -324,18 +335,18 @@ async def frontend_mini_app_dashboard(request):
             <div class="profile-card">
                 <h2>PD MINTER CREDITS</h2>
                 <div class="xp-val" id="total-xp">0000</div>
-                <div style="font-size: 11px; font-weight: bold; color: #7e91a8; letter-spacing: 0.5px;">SECURED VIA PD CARD PROTOCOL</div>
+                <div style="font-size: 11px; font-weight: bold; color: #7e91a8;">SECURED VIA PD CARD PROTOCOL</div>
             </div>
 
             <div class="live-crypto-bar">
                 <div style="font-weight: 800; display: flex; align-items: center;">🪙 <span style="margin-left:6px;">XRP / USD Live:</span></div>
-                <div id="crypto-ticker-val" style="font-weight: 900; color: #00ff6e; text-shadow: 0 0 10px rgba(0,255,110,0.3);">Loading...</div>
+                <div id="crypto-ticker-val" style="font-weight: 900; color: #00ff6e;">Loading...</div>
             </div>
 
-            <div style="text-align: left; font-weight: 900; font-size: 12px; color: #00ff6e; margin-bottom: 10px; letter-spacing: 0.5px;">📅 DAILY CARD BONUSES</div>
+            <div style="text-align: left; font-weight: 900; font-size: 12px; color: #00ff6e; margin-bottom: 10px;">📅 DAILY CARD BONUSES</div>
             <div class="grid-container" id="calendar"></div>
 
-            <div style="text-align: left; font-weight: 900; font-size: 12px; color: #ffffff; margin: 30px 0 10px 0; letter-spacing: 0.5px;">🏆 TOP COMMUNITY TRADERS</div>
+            <div style="text-align: left; font-weight: 900; font-size: 12px; color: #ffffff; margin: 30px 0 10px 0;">🏆 TOP COMMUNITY TRADERS</div>
             <div class="leaderboard" id="leaderboard"></div>
         </div>
 
