@@ -82,28 +82,57 @@ async def handle_start_command(message: types.Message):
     )
     await message.reply(welcome_text, reply_markup=kb, parse_mode="Markdown")
 
-@dp.message(Command("whale"))
-async def handle_whale_command(message: types.Message):
-    log_user_activity(message.from_user)
-    await message.reply("📡 Tracking live whale ledger systems...", parse_mode="Markdown")
-
-# Global Text Fallback (Tracks Live Messages + Tags Rewards)
+# Global Message Routing Logic
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text: return
+    
+    # 1. GROUP GATEKEEPER: Ignore all slashes/commands in groups except /start
+    if message.chat.type != "private" and message.text.startswith("/"):
+        return
+
+    # 2. PRIVATE DM PORTAL: Act strictly as a hub gateway button provider
+    if message.chat.type == "private":
+        log_user_activity(message.from_user)
+        app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 CHECK YOUR XP STATUS", web_app=WebAppInfo(url=app_url))]
+        ])
+        await message.reply(
+            "🚀 **KING LEO PORTAL**\n\n"
+            "Use the button below to launch the 3D panel and verify your network metrics instantly.", 
+            reply_markup=kb, 
+            parse_mode="Markdown"
+        )
+        return
+
+    # 3. GROUP HANDLING: Passively drop message counts & parse tags
     log_user_activity(message.from_user)
 
     bot_info = await bot.get_me()
     bot_username = f"@{bot_info.username}"
-    is_private = message.chat.type == "private"
     is_tagged = bot_username in message.text
 
-    if is_tagged and not is_private:
+    # Actionable Response on Explicit AI Tagging inside Supergroups
+    if is_tagged:
         user_id = get_or_create_user(message.from_user)
         username_label = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+        
+        # Calculate random reward
         secret_xp = random.randint(1, 50)
         xp_database[user_id]["xp"] += secret_xp
-        await message.reply(f'🎉 🔥 BOOM! "{username_label}" just gained {secret_xp} XRP for tagging the AI!')
+        
+        # Generate inline key layout pointing straight to the dashboard deployment frame
+        app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🦅 VIEW YOUR WALLET XP 🦅", web_app=WebAppInfo(url=app_url))]
+        ])
+        
+        await message.reply(
+            f'🎉 🔥 **BOOM!**\n\n"{username_label}" just earned an unexpected bonus of **{secret_xp} XRP** points for tagging the AI anchor node!',
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
 
 # 4. API Endpoints
 async def api_leaderboard_data(request):
