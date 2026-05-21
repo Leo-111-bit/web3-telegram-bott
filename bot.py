@@ -4,7 +4,7 @@ import logging
 import asyncio
 import aiohttp
 import re
-import json
+import random
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
@@ -15,7 +15,7 @@ from groq import Groq
 # 1. Environment Config Validation
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-WEB_APP_URL = os.environ.get("WEB_APP_URL", "") # We will configure this URL in Render later
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
@@ -30,7 +30,8 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 
 # Active In-Memory Database Engine
 user_registry = {}
-xp_database = {}  # Format: {user_id: {"username": "@...", "messages": 0, "xp": 0, "last_active": "date"}}
+xp_database = {}  
+
 last_seen_tx = {"id": None}
 
 TICKER_MAP = {
@@ -45,11 +46,7 @@ SYSTEM_INSTRUCTION = """
 You are an elite, highly knowledgeable AI Assistant. Detect and adapt automatically to whatever language the user speaks and reply natively. Keep responses clean.
 """
 
-# Helper: Track Community Engagement Analytics
-def log_user_activity(user: types.User):
-    if user.is_bot:
-        return
-    
+def get_or_create_user(user: types.User):
     user_id = str(user.id)
     username = f"@{user.username}" if user.username else user.first_name
     today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -62,15 +59,21 @@ def log_user_activity(user: types.User):
             "username": username,
             "messages": 0,
             "xp": 0,
-            "last_active": today
+            "last_active": today,
+            "last_checkin": "",
+            "checkin_days": []
         }
+    return user_id
 
-    # Award 15 XP points per chat message interaction
+def log_user_activity(user: types.User):
+    if user.is_bot: return
+    user_id = get_or_create_user(user)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    
     xp_database[user_id]["messages"] += 1
     xp_database[user_id]["xp"] += 15
     xp_database[user_id]["last_active"] = today
 
-# Helper function to pull real-time on-chain data
 async def fetch_latest_whale_tx():
     try:
         async with aiohttp.ClientSession() as session:
@@ -126,16 +129,13 @@ async def get_structured_price_card(ticker_input: str):
 @dp.message(CommandStart())
 async def handle_start_command(message: types.Message):
     log_user_activity(message.from_user)
-    
-    # Generate the Mini App Launch Button Markup
-    app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com" # Fallback safety
+    app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Open King Leo Mini App", web_app=WebAppInfo(url=app_url))]
+        [InlineKeyboardButton(text="⚡ LAUNCH KING LEO HUB ⚡", web_app=WebAppInfo(url=app_url))]
     ])
-
     welcome_text = (
-        "👑 **Welcome to King Leo Web3 Dashboard!**\n\n"
-        "Tap the button below to launch the Mini App interface, track your daily message stats, and check the community Leaderboard XP live!"
+        "🔥 **WELCOME TO THE KING LEO ECOSYSTEM** 🔥\n\n"
+        "Tap the flashy button below to open your custom Web3 Dashboard! Secure your check-in rewards and dominate the leaderboard grid."
     )
     await message.reply(welcome_text, reply_markup=kb, parse_mode="Markdown")
 
@@ -160,12 +160,10 @@ async def handle_private_message_command(message: types.Message):
         await bot.send_message(chat_id=target_chat_id, text=f"{args[2]}\n\n[Direct Admin PM]")
     except Exception: pass
 
-# 4. Global Text Fallback (Tracks Messages + Processes AI Response)
+# 4. Global Text Fallback (Tracks Messages + Awards Secret Tagging XP + AI Engine)
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text: return
-    
-    # Core Feature: Track every single group or DM chat interaction to fuel leaderboard database
     log_user_activity(message.from_user)
 
     bot_info = await bot.get_me()
@@ -175,6 +173,14 @@ async def handle_incoming_messages(message: types.Message):
     is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
 
     if is_private or is_tagged or is_reply_to_bot:
+        user_id = get_or_create_user(message.from_user)
+        username_label = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+
+        if is_tagged and not is_private:
+            secret_xp = random.randint(1, 50)
+            xp_database[user_id]["xp"] += secret_xp
+            await message.reply(f'🎉 "{username_label}" gained {secret_xp} xrp for tagging!')
+
         text_clean = message.text.replace(bot_username, "").lower().strip()
         if any(keyword in text_clean for keyword in ["price", "how much", "rate"]):
             for word in text_clean.split():
@@ -194,7 +200,7 @@ async def handle_incoming_messages(message: types.Message):
             await message.reply(response.choices[0].message.content.strip(), parse_mode=None)
         except Exception: pass
 
-# 5. Background Live Whale Alerts Loop
+# 5. Background Live Loops
 async def live_whale_alert_loop():
     await asyncio.sleep(15)
     while True:
@@ -206,92 +212,237 @@ async def live_whale_alert_loop():
         except Exception: pass
         await asyncio.sleep(60)
 
-# 6. Mini App Web Server Integration (API Endpoint + Frontend HTML Layout)
+# 6. Mini App Router Logic
 async def api_leaderboard_data(request):
-    """API endpoint feeding data right into the frontend dashboard array dynamically"""
     sorted_players = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
     return web.json_response({"leaderboard": sorted_players})
 
+async def api_user_status(request):
+    user_id = request.query.get("user_id", "default_guest")
+    username = request.query.get("username", "Guest Player")
+    
+    if user_id not in xp_database:
+        xp_database[user_id] = {
+            "username": username,
+            "messages": 0,
+            "xp": 0,
+            "last_active": datetime.utcnow().strftime("%Y-%m-%d"),
+            "last_checkin": "",
+            "checkin_days": []
+        }
+    return web.json_response(xp_database[user_id])
+
+async def api_execute_checkin(request):
+    data = await request.json()
+    user_id = data.get("user_id")
+    day_num = int(data.get("day"))
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+
+    if not user_id or user_id not in xp_database:
+        return web.json_response({"success": False, "message": "User mismatch sequence."})
+
+    user_profile = xp_database[user_id]
+    if user_profile["last_checkin"] == today_str:
+        return web.json_response({"success": False, "message": "❌ Access Denied: You already checked in today!"})
+
+    if day_num in user_profile["checkin_days"]:
+        return web.json_response({"success": False, "message": "Day already claimed."})
+
+    user_profile["xp"] += 10
+    user_profile["last_checkin"] = today_str
+    user_profile["checkin_days"].append(day_num)
+    
+    return web.json_response({
+        "success": True, 
+        "message": f"🚀 BOOM! Day {day_num} Secured! +10 XP added to your ranking.",
+        "new_xp": user_profile["xp"],
+        "checkin_days": user_profile["checkin_days"]
+    })
+
 async def frontend_mini_app_dashboard(request):
-    """Renders a fully interactive mobile UI layout inside the Telegram container"""
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>King Leo Leaderboard</title>
+        <title>King Leo Premium Hub</title>
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
+            * { box-sizing: border-box; }
             body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                background-color: #0b0e14;
-                color: #ffffff;
-                margin: 0;
-                padding: 15px;
-                text-align: center;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background: radial-gradient(circle at top, #141a29 0%, #080b11 100%);
+                color: #ffffff; margin: 0; padding: 20px; text-align: center; overflow-x: hidden;
             }
-            .app-container {
-                max-width: 500px;
-                margin: 0 auto;
+            
+            /* Profile Header Sphere Elements */
+            .profile-capsule {
+                background: linear-gradient(135deg, rgba(0, 255, 204, 0.1), rgba(255, 0, 128, 0.1));
+                border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px;
+                padding: 20px; margin-bottom: 25px; backdrop-filter: blur(10px);
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); position: relative; overflow: hidden;
             }
-            h2 { color: #00ffcc; margin-bottom: 5px; text-shadow: 0 0 10px #00ffcc; }
-            p.subtitle { color: #8a99ad; font-size: 14px; margin-top: 0; margin-bottom: 25px; }
-            .leaderboard-card {
-                background: linear-gradient(145deg, #131a26, #1a2333);
-                border-radius: 12px;
-                padding: 10px;
-                box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-                border: 1px solid #223147;
+            .profile-capsule::before {
+                content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
+                background: conic-gradient(transparent, rgba(0, 255, 204, 0.3), transparent 30%);
+                animation: rotateGlow 6s linear infinite; z-index: 1; pointer-events: none;
+            }
+            .profile-content { position: relative; z-index: 2; }
+            h2 { font-size: 26px; font-weight: 900; margin: 0; letter-spacing: 1px; background: linear-gradient(90deg, #00ffcc, #ff007f); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+            .xp-display { font-size: 32px; font-weight: 900; color: #00ffcc; margin: 10px 0 5px 0; text-shadow: 0 0 15px rgba(0, 255, 204, 0.6); }
+            .subtitle { color: #8fa0b5; font-size: 13px; margin: 0; font-weight: 500; }
+
+            .section-header {
+                display: flex; align-items: center; justify-content: space-between;
+                font-size: 14px; font-weight: 800; color: #ff007f; margin: 25px 0 12px 0;
+                text-transform: uppercase; letter-spacing: 1.5px; text-shadow: 0 0 8px rgba(255, 0, 127, 0.3);
+            }
+
+            /* Neon Cyber Calendar Grid Layout */
+            .calendar-grid {
+                display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+                background: rgba(22, 31, 44, 0.6); border-radius: 16px; padding: 15px;
+                border: 1px solid rgba(255, 255, 255, 0.05); backdrop-filter: blur(5px);
+            }
+            .calendar-day {
+                background: #0d121c; border: 1px solid #202b3d; border-radius: 10px;
+                padding: 12px 0; font-size: 11px; font-weight: 800; cursor: pointer; color: #8fa0b5;
+                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); position: relative;
+            }
+            .calendar-day:hover { border-color: #00ffcc; color: #ffffff; }
+            .calendar-day.claimed {
+                background: linear-gradient(135deg, #00ffcc 0%, #00b386 100%);
+                color: #080b11; border-color: #00ffcc; font-weight: 900;
+                box-shadow: 0 4px 15px rgba(0, 255, 204, 0.4); transform: translateY(-2px);
+            }
+            .calendar-day:active { transform: scale(0.92); }
+
+            /* Premium Leaderboard Glass Cards */
+            .leaderboard-container {
+                background: rgba(22, 31, 44, 0.6); border-radius: 16px; padding: 8px;
+                border: 1px solid rgba(255, 255, 255, 0.05); backdrop-filter: blur(5px);
             }
             .row {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 12px 15px;
-                border-bottom: 1px solid #223147;
+                display: flex; justify-content: space-between; align-items: center;
+                padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+                transition: background 0.2s ease; border-radius: 10px;
             }
+            .row:hover { background: rgba(255, 255, 255, 0.02); }
             .row:last-child { border-bottom: none; }
-            .user-info { display: flex; align-items: center; gap: 10px; }
-            .rank { font-weight: bold; width: 25px; text-align: left; }
-            .rank-1 { color: #ffd700; }
-            .rank-2 { color: #c0c0c0; }
-            .rank-3 { color: #cd7f32; }
-            .name { font-size: 15px; font-weight: 500; }
-            .stats { text-align: right; }
-            .xp-val { color: #00ffcc; font-weight: bold; font-size: 15px; }
-            .msg-count { color: #8a99ad; font-size: 12px; }
-            .refresh-btn {
-                background-color: #00ffcc;
-                color: #0b0e14;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 8px;
-                font-weight: bold;
-                margin-top: 20px;
-                cursor: pointer;
-                box-shadow: 0 4px 12px rgba(0,255,204,0.3);
+            .user-details { display: flex; align-items: center; gap: 12px; }
+            
+            .rank-badge {
+                font-weight: 900; font-size: 14px; width: 26px; height: 26px;
+                display: flex; align-items: center; justify-content: center; border-radius: 50%;
+                background: #0d121c; border: 1px solid #202b3d; color: #8fa0b5;
+            }
+            .row:nth-child(1) .rank-badge { background: #ffd700; color: #080b11; border-color: #ffd700; box-shadow: 0 0 10px #ffd700; }
+            .row:nth-child(2) .rank-badge { background: #c0c0c0; color: #080b11; border-color: #c0c0c0; box-shadow: 0 0 10px #c0c0c0; }
+            .row:nth-child(3) .rank-badge { background: #cd7f32; color: #080b11; border-color: #cd7f32; box-shadow: 0 0 10px #cd7f32; }
+            
+            .username-text { font-size: 14px; font-weight: 600; color: #ffffff; }
+            .xp-pill {
+                background: rgba(0, 255, 204, 0.1); color: #00ffcc; border: 1px solid rgba(0, 255, 204, 0.2);
+                padding: 4px 12px; border-radius: 20px; font-weight: 800; font-size: 13px;
+                box-shadow: inset 0 0 8px rgba(0, 255, 204, 0.05);
+            }
+
+            .sync-action-btn {
+                background: linear-gradient(90deg, #ff007f 0%, #7f00ff 100%);
+                color: #ffffff; border: none; padding: 15px; width: 100%; border-radius: 14px;
+                font-weight: 800; margin-top: 25px; cursor: pointer; font-size: 15px; letter-spacing: 0.5px;
+                box-shadow: 0 6px 20px rgba(255, 0, 127, 0.3); transition: all 0.25s ease;
+            }
+            .sync-action-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(255, 0, 127, 0.5); }
+            .sync-action-btn:active { transform: scale(0.98); }
+
+            @keyframes rotateGlow {
+                100% { transform: rotate(360deg); }
             }
         </style>
     </head>
     <body>
-        <div class="app-container">
-            <h2>⚡ KING LEO COMMUNITY ⚡</h2>
-            <p class="subtitle">Real-time Daily Activity XP Leaderboard</p>
-            
-            <div class="leaderboard-card" id="leaderboard-box">
-                <p style="color: #8a99ad; padding: 20px;">Loading live chain metrics...</p>
+        <div class="profile-capsule">
+            <div class="profile-content">
+                <h2 id="user-display">🔥 LEO COIN HUB 🔥</h2>
+                <div class="xp-display" id="user-total-xp">0000</div>
+                <p class="subtitle">GLOBAL ACCOUNT NETWORK BALANCE</p>
             </div>
+        </div>
+        
+        <div class="section-header">
+            <span>📅 DAILY REWARD MATRIX</span>
+            <span style="color: #00ffcc; font-size: 11px;">+10 XP DAILY</span>
+        </div>
+        <div class="calendar-grid" id="calendar-box"></div>
 
-            <button class="refresh-btn" onclick="fetchLeaderboard()">🔄 Sync Leaderboard</button>
+        <div class="section-header">
+            <span>🏆 RANKING LEADERBOARD</span>
+            <span style="color: #ff007f; font-size: 11px;">LIVE SPARK</span>
+        </div>
+        <div class="leaderboard-container" id="leaderboard-box">
+            <p style="color: #8fa0b5; padding: 15px; font-size: 13px;">Syncing active nodes...</p>
         </div>
 
-        <script>
-            // Initialize Telegram Web App container mechanics
-            const tg = window.Telegram.WebApp;
-            tg.expand(); // Forces container to occupy full mobile height screen aspect
+        <button class="sync-action-btn" onclick="syncEcosystemData()">🔄 REFRESH NETWORK STATS</button>
 
-            async function fetchLeaderboard() {
+        <script>
+            const tg = window.Telegram.WebApp;
+            tg.expand();
+
+            const rawUser = tg.initDataUnsafe.user || { id: 12345, first_name: "Admin User", username: "KingLeo" };
+            const userId = String(rawUser.id);
+            const userHandle = rawUser.username ? `@${rawUser.username}` : rawUser.first_name;
+
+            document.getElementById('user-display').innerText = userHandle.toUpperCase();
+
+            async function syncEcosystemData() {
+                await renderPremiumCalendar();
+                await fetchPremiumLeaderboard();
+            }
+
+            async function renderPremiumCalendar() {
+                try {
+                    const res = await fetch(`/api/userstatus?user_id=${userId}&username=${encodeURIComponent(userHandle)}`);
+                    const userProfile = await res.json();
+                    
+                    document.getElementById('user-total-xp').innerText = `${userProfile.xp} XP`;
+                    
+                    const container = document.getElementById('calendar-box');
+                    container.innerHTML = '';
+
+                    for (let d = 1; d <= 30; d++) {
+                        const isClaimed = userProfile.checkin_days.includes(d);
+                        const dayBtn = document.createElement('div');
+                        dayBtn.className = `calendar-day ${isClaimed ? 'claimed' : ''}`;
+                        dayBtn.innerText = isClaimed ? `✓ Day ${d}` : `Day ${d}`;
+                        if (!isClaimed) {
+                            dayBtn.onclick = () => executeClaim(d);
+                        }
+                        container.appendChild(dayBtn);
+                    }
+                } catch(e) { console.error(e); }
+            }
+
+            async function executeClaim(dayNum) {
+                try {
+                    const res = await fetch('/api/checkin', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user_id: userId, day: dayNum })
+                    });
+                    const result = await res.json();
+                    if(tg.showAlert) {
+                        tg.showAlert(result.message);
+                    } else {
+                        alert(result.message);
+                    }
+                    syncEcosystemData();
+                } catch(e) { console.error(e); }
+            }
+
+            async function fetchPremiumLeaderboard() {
                 try {
                     const res = await fetch('/api/leaderboard');
                     const data = await res.json();
@@ -299,36 +450,25 @@ async def frontend_mini_app_dashboard(request):
                     container.innerHTML = '';
 
                     if(data.leaderboard.length === 0) {
-                        container.innerHTML = '<p style="color: #8a99ad; padding: 20px;">No messages tracked today yet. Start yapping in the chat!</p>';
+                        container.innerHTML = '<p style="color: #8fa0b5; padding: 20px; font-size: 13px;">No transaction history found.</p>';
                         return;
                     }
 
                     data.leaderboard.forEach((user, index) => {
-                        const rankNum = index + 1;
-                        let rankClass = '';
-                        if(rankNum === 1) rankClass = 'rank-1';
-                        if(rankNum === 2) rankClass = 'rank-2';
-                        if(rankNum === 3) rankClass = 'rank-3';
-
                         container.innerHTML += `
                             <div class="row">
-                                <div class="user-info">
-                                    <span class="rank ${rankClass}">#${rankNum}</span>
-                                    <span class="name">${user.username}</span>
+                                <div class="user-details">
+                                    <div class="rank-badge">${index + 1}</div>
+                                    <span class="username-text">${user.username}</span>
                                 </div>
-                                <div class="stats">
-                                    <div class="xp-val">${user.xp} XP</div>
-                                    <div class="msg-count">${user.messages} texts today</div>
-                                </div>
+                                <span class="xp-pill">${user.xp} XP</span>
                             </div>
                         `;
                     });
-                } catch (e) {
-                    console.error("Error loading metrics:", e);
-                }
+                } catch (e) { console.error(e); }
             }
-            // Execute fetching pipeline automatically on window loading sequence
-            window.onload = fetchLeaderboard;
+
+            window.onload = syncEcosystemData;
         </script>
     </body>
     </html>
@@ -339,6 +479,8 @@ async def start_web_server():
     app = web.Application()
     app.router.add_get("/", frontend_mini_app_dashboard)
     app.router.add_get("/api/leaderboard", api_leaderboard_data)
+    app.router.add_get("/api/userstatus", api_user_status)
+    app.router.add_post("/api/checkin", api_execute_checkin)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
@@ -349,7 +491,7 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
     asyncio.create_task(live_whale_alert_loop())
-    logging.info("Mini App Web Server Pipeline Deployed Successfully!")
+    logging.info("Premium Cyber Dashboard Engine fully Online!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
