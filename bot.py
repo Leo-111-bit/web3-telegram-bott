@@ -48,7 +48,7 @@ def get_or_create_user(user: types.User):
             "last_checkin": "",
             "checkin_days": [],
             "last_tag_claim": "",
-            "last_wheel_spin": ""  # Added to track daily lucky dip wheel spin
+            "last_wheel_spin": ""
         }
     else:
         xp_database[user_id]["username"] = username
@@ -196,7 +196,7 @@ async def api_execute_spin(request):
     })
 
 # ==========================================
-# 5. PREMIUM 3D PANDA WEB APP UI WITH CALCULATOR & SPIN WHEEL
+# 5. PREMIUM UI (REPLACED WITH NEW DESIGN)
 # ==========================================
 async def frontend_mini_app_dashboard(request):
     html_content = """
@@ -205,203 +205,69 @@ async def frontend_mini_app_dashboard(request):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>PD Card - Premium Trading Desk</title>
+        <title>PD CARD | PREMIUM</title>
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background: radial-gradient(circle at center, #14121f 0%, #08070d 100%);
-                color: #ffffff; margin: 0; padding: 20px; text-align: center; overflow-x: hidden;
-            }
-            .giftcard-3d-frame {
-                background: linear-gradient(135deg, rgba(30, 27, 54, 0.8) 0%, rgba(15, 12, 28, 0.9) 100%);
-                border: 2px solid rgba(168, 85, 247, 0.4);
-                border-radius: 20px; padding: 25px; margin-bottom: 25px;
-                position: relative; overflow: hidden;
-                box-shadow: 0 25px 50px -12px rgba(168, 85, 247, 0.25), inset 0 1px 1px rgba(255,255,255,0.1);
-                transform: perspective(1000px) rotateX(8deg);
-            }
-            .brand-logo-text { 
-                font-size: 26px; font-weight: 900; margin: 0; letter-spacing: 2px; text-align: left;
-                background: linear-gradient(90deg, #a855f7, #f43f5e); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            }
-            .panda-badge { position: absolute; top: 20px; right: 20px; font-size: 32px; filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.6)); }
-            .voucher-balance-display {
-                font-size: 45px; font-weight: 900; color: #ffffff; margin: 25px 0 10px 0;
-                text-align: left; font-family: monospace; text-shadow: 0 0 20px rgba(168, 85, 247, 0.4);
-            }
-            .card-meta-row { display: flex; justify-content: space-between; font-size: 11px; color: #a78bfa; font-weight: bold; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 15px; margin-top: 15px; }
-            .ticker-banner { background: rgba(15, 12, 28, 0.6); border-radius: 12px; padding: 10px; font-size: 11px; font-weight: 700; color: #f43f5e; border: 1px dashed rgba(244, 63, 94, 0.3); margin-bottom: 25px; }
-            
-            /* Section Panel Framework Style */
-            .feature-section-panel {
-                background: rgba(15, 12, 28, 0.8); border-radius: 18px; padding: 20px; margin-bottom: 25px;
-                border: 1px solid rgba(255, 255, 255, 0.04); text-align: left;
-            }
-            .section-header-title { font-weight: 800; color: #a855f7; margin-bottom: 15px; font-size: 14px; letter-spacing: 1px; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
-            
-            /* feature 1: Rate Calculator Layout styling */
-            .calc-input-box { width: 100%; padding: 12px; background: #1e1b36; border: 1px solid rgba(168,85,247,0.3); border-radius: 10px; color: white; font-size: 15px; margin-bottom: 15px; box-sizing: border-box; }
-            .calc-output-payout { background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.3); padding: 15px; border-radius: 10px; text-align: center; font-size: 20px; font-weight: 900; color: #f43f5e; }
-
-            /* feature 2: 3D Wheel of Fortune Layout components */
-            .wheel-outer-wrapper { display: flex; flex-direction: column; align-items: center; position: relative; margin: 15px 0; }
-            .wheel-spinner-canvas {
-                width: 260px; height: 260px; border-radius: 50%; border: 6px solid #a855f7;
-                background: conic-gradient(#1e1b36 0deg 60deg, #f43f5e 60deg 120deg, #2e2a54 120deg 180deg, #a855f7 180deg 240deg, #121024 240deg 300deg, #ec4899 300deg 360deg);
-                box-shadow: 0 0 30px rgba(168, 85, 247, 0.4); transition: transform 4s cubic-bezier(0.1, 0.8, 0.25, 1); position: relative;
-            }
-            .wheel-pin-indicator { width: 0; height: 0; border-left: 15px solid transparent; border-right: 15px solid transparent; border-top: 25px solid #ffffff; position: absolute; top: -10px; z-index: 10; filter: drop-shadow(0 4px 5px rgba(0,0,0,0.5)); }
-            .spin-trigger-btn { margin-top: 20px; width: 80%; background: linear-gradient(90deg, #a855f7, #f43f5e); border: none; padding: 12px; border-radius: 12px; color: white; font-weight: 900; font-size: 14px; cursor: pointer; box-shadow: 0 5px 15px rgba(244,63,94,0.4); }
-
-            /* 30 Days Coupon Grid Matrix configuration */
-            .voucher-grid-matrix { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-            .voucher-ticket { background: #1e1b36; border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; padding: 14px 0; font-size: 11px; font-weight: 800; cursor: pointer; color: #94a3b8; text-align: center; position: relative; transition: all 0.2s ease; }
-            .voucher-ticket:hover { transform: scale(1.05); border-color: #a855f7; }
-            .voucher-ticket::before, .voucher-ticket::after { content: ''; position: absolute; width: 6px; height: 6px; background: #08070d; border-radius: 50%; top: 50%; transform: translateY(-50%); }
-            .voucher-ticket::before { left: -4px; }
-            .voucher-ticket::after { right: -4px; }
-            .voucher-ticket.redeemed { background: linear-gradient(135deg, #f43f5e 0%, #a855f7 100%); color: #ffffff; border-color: transparent; font-weight: 900; box-shadow: 0 0 10px rgba(168, 85, 247, 0.3); }
-            
-            .leader-desk-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; margin-bottom: 6px; border-radius: 10px; background: rgba(255,255,255,0.01); }
-            .rank-index { font-weight: 900; color: #f43f5e; margin-right: 8px; }
-            .credit-score-badge { background: rgba(168, 85, 247, 0.15); color: #c084fc; font-weight: 800; padding: 4px 12px; border-radius: 8px; font-size: 12px; border: 1px solid rgba(168, 85, 247, 0.2); }
+            :root { --accent: #a855f7; --bg: #0a0e17; --glass: rgba(255,255,255,0.05); }
+            body { font-family: -apple-system, sans-serif; background: var(--bg); color: white; margin: 0; padding: 15px; }
+            .card { background: var(--glass); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; padding: 20px; margin-bottom: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+            .balance-text { font-size: 36px; font-weight: 800; background: linear-gradient(90deg, #fff, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+            .grid-matrix { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+            .cell { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 10px; font-size: 10px; text-align: center; border: 1px solid rgba(255,255,255,0.05); }
+            .btn { background: var(--accent); border: none; padding: 12px; border-radius: 12px; color: white; font-weight: bold; width: 100%; margin-top: 10px; }
+            .spin-wheel { width: 200px; height: 200px; border-radius: 50%; border: 4px solid var(--accent); margin: 20px auto; transition: transform 4s ease-out; }
         </style>
     </head>
     <body>
-        <div class="giftcard-3d-frame" id="main-card">
-            <div class="brand-logo-text">PD CARD</div>
-            <div class="panda-badge">🐼</div>
-            <div class="voucher-balance-display" id="user-total-xp">00.00 XP</div>
-            <div class="card-meta-row">
-                <div id="user-display">TRADER INDEX</div>
-                <div>SECURE VOUCHER WALLET</div>
-            </div>
+        <div class="card">
+            <div style="font-size: 12px; color: #a855f7; font-weight: bold;">TOTAL VOUCHER BALANCE</div>
+            <div class="balance-text" id="user-total-xp">0.00 XP</div>
         </div>
-        <div class="ticker-banner">⚡ SECURE GIFT CARD EXCHANGE DESK • PREMIUM ALLOCATIONS ENGAGED ⚡</div>
-
-        <div class="feature-section-panel">
-            <div class="section-header-title">📈 Live Voucher Rate Index</div>
-            <select class="calc-input-box" id="card-type" onchange="runCalculation()">
-                <option value="920">Apple iTunes Gift Card (Premium) - ₦920/$</option>
-                <option value="950">Razer Gold Allocation Voucher - ₦950/$</option>
-                <option value="890">Steam Wallet Code Index - ₦890/$</option>
-                <option value="870">Vanilla Visa / Amex Protocol - ₦870/$</option>
-            </select>
-            <input type="number" class="calc-input-box" id="card-amount" placeholder="Enter Card Value Amount ($)" value="100" oninput= "runCalculation()">
-            <div class="calc-output-payout" id="payout-payout">ESTIMATED PAYOUT: ₦95,000</div>
+        <div class="card">
+            <div style="margin-bottom: 10px; font-weight: bold;">Premium Rate Calculator</div>
+            <input type="number" id="card-amount" placeholder="Amount ($)" style="width: 100%; padding: 12px; border-radius: 10px; border:none; background: #1a1a1a; color: white; margin-bottom: 10px;" oninput="runCalc()">
+            <div id="payout-payout" style="font-weight: bold; color: #f43f5e;">PAYOUT: ₦0</div>
         </div>
-
-        <div class="feature-section-panel" style="text-align: center;">
-            <div class="section-header-title" style="justify-content: center;">🎡 Lucky Panda Spin Wheel</div>
-            <div class="wheel-outer-wrapper">
-                <div class="wheel-pin-indicator"></div>
-                <div class="wheel-spinner-canvas" id="spin-wheel"></div>
-            </div>
-            <button class="spin-trigger-btn" onclick="executeLuckySpin()">TRIGGER COOLDOWN SPIN</button>
+        <div class="card">
+            <div class="spin-wheel" id="spin-wheel"></div>
+            <button class="btn" onclick="executeLuckySpin()">TRIGGER SPIN</button>
         </div>
-
-        <div class="feature-section-panel">
-            <div class="section-header-title">🎫 30-Day Allocation Grid Matrix</div>
-            <div class="voucher-grid-matrix" id="calendar-box"></div>
+        <div class="card">
+            <div class="grid-matrix" id="calendar-box"></div>
         </div>
-
-        <div class="feature-section-panel">
-            <div class="section-header-title">🏆 Global Trading Desk Index</div>
-            <div id="leaderboard-box"></div>
-        </div>
-
+        <div class="card" id="leaderboard-box"></div>
         <script>
-            const tg = window.Telegram.WebApp;
-            tg.expand();
-
-            const rawUser = tg.initDataUnsafe.user || { id: 7777, first_name: "Active Trader" };
-            const userId = String(rawUser.id);
-            let userHandle = rawUser.username ? `@${rawUser.username}` : (rawUser.first_name || "Trader");
-
-            document.getElementById('user-display').innerText = userHandle.toUpperCase();
-
-            function runCalculation() {
-                const rate = parseFloat(document.getElementById('card-type').value);
-                const amt = parseFloat(document.getElementById('card-amount').value) || 0;
-                const calculation = rate * amt;
-                document.getElementById('payout-payout').innerText = `ESTIMATED PAYOUT: ₦${calculation.toLocaleString()}`;
+            const tg = window.Telegram.WebApp; tg.expand();
+            const userId = String(tg.initDataUnsafe.user?.id || 7777);
+            const userHandle = tg.initDataUnsafe.user?.username || "Trader";
+            
+            function runCalc() { 
+                const val = document.getElementById('card-amount').value || 0;
+                document.getElementById('payout-payout').innerText = `PAYOUT: ₦${(val * 920).toLocaleString()}`;
             }
-
-            async function executeLuckySpin() {
-                try {
-                    const res = await fetch('/api/spinwheel', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user_id: userId })
-                    });
-                    const result = await res.json();
-                    if (!result.success) {
-                        if(tg.showAlert) tg.showAlert(result.message); else alert(result.message);
-                        return;
-                    }
-                    
-                    // 3D Matrix Spin Canvas Rotation Angles Execution
-                    const targetDegrees = (result.slice_index * 60) + 1440 + Math.floor(Math.random() * 30);
-                    const wheel = document.getElementById('spin-wheel');
-                    wheel.style.transform = `rotate(-${targetDegrees}deg)`;
-                    
-                    setTimeout(() => {
-                        if(tg.showAlert) tg.showAlert(result.message); else alert(result.message);
-                        syncAllData();
-                    }, 4100);
-                } catch(e) { console.error(e); }
-            }
-
+            
             async function syncAllData() {
-                try {
-                    const res = await fetch(`/api/userstatus?user_id=${userId}&username=${encodeURIComponent(userHandle)}`);
-                    const userProfile = await res.json();
-                    document.getElementById('user-total-xp').innerText = `${userProfile.xp}.00 XP`;
-                    
-                    const container = document.getElementById('calendar-box');
-                    container.innerHTML = '';
-                    
-                    // Render Expanded 30-Day Sequence Configuration
-                    for (let d = 1; d <= 30; d++) {
-                        const isClaimed = userProfile.checkin_days.includes(d);
-                        const coupon = document.createElement('div');
-                        coupon.className = `voucher-ticket ${isClaimed ? 'redeemed' : ''}`;
-                        coupon.innerText = isClaimed ? `✓ D${d}` : `DAY ${d}`;
-                        if (!isClaimed) coupon.onclick = () => claimCoupon(d);
-                        container.appendChild(coupon);
-                    }
-
-                    const lbRes = await fetch('/api/leaderboard');
-                    const lbData = await lbRes.json();
-                    const lbContainer = document.getElementById('leaderboard-box');
-                    lbContainer.innerHTML = '';
-                    
-                    lbData.leaderboard.forEach((user, index) => {
-                        lbContainer.innerHTML += `
-                            <div class="leader-desk-row">
-                                <div><span class="rank-index">#${index+1}</span><span style="font-weight:600;">${user.username}</span></div>
-                                <div class="credit-score-badge">${user.xp} XP</div>
-                            </div>
-                        `;
-                    });
-                } catch(e) { console.error(e); }
+                const res = await fetch(`/api/userstatus?user_id=${userId}&username=${userHandle}`);
+                const data = await res.json();
+                document.getElementById('user-total-xp').innerText = `${data.xp}.00 XP`;
+                const cal = document.getElementById('calendar-box');
+                cal.innerHTML = '';
+                for(let i=1; i<=30; i++) {
+                    const isClaimed = data.checkin_days.includes(i);
+                    cal.innerHTML += `<div class="cell" style="${isClaimed ? 'background:var(--accent)' : ''}">${i}</div>`;
+                }
             }
-
-            async function claimCoupon(dayNum) {
-                try {
-                    const res = await fetch('/api/checkin', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user_id: userId, day: dayNum })
-                    });
-                    const result = await res.json();
-                    if(tg.showAlert) tg.showAlert(result.message); else alert(result.message);
-                    syncAllData();
-                } catch(e) { console.error(e); }
+            
+            async function executeLuckySpin() {
+                const res = await fetch('/api/spinwheel', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: userId})});
+                const data = await res.json();
+                if(data.success) {
+                    document.getElementById('spin-wheel').style.transform = `rotate(${3600 + (data.slice_index * 60)}deg)`;
+                    setTimeout(syncAllData, 4000);
+                } else alert(data.message);
             }
-
-            window.onload = () => { syncAllData(); runCalculation(); };
+            
+            window.onload = syncAllData;
         </script>
     </body>
     </html>
@@ -417,7 +283,7 @@ async def start_web_server():
     app.router.add_get("/api/leaderboard", api_leaderboard_data)
     app.router.add_get("/api/userstatus", api_user_status)
     app.router.add_post("/api/checkin", api_execute_checkin)
-    app.router.add_post("/api/spinwheel", api_execute_spin) # Hook up the spin handler endpoint
+    app.router.add_post("/api/spinwheel", api_execute_spin)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
