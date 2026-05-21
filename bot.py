@@ -24,7 +24,9 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Broad dictionary for automated conversational matching
+# Dynamic database map to match usernames to user numeric IDs
+user_registry = {}
+
 TICKER_MAP = {
     "btc": "bitcoin", "bitcoin": "bitcoin",
     "eth": "ethereum", "ethereum": "ethereum",
@@ -44,7 +46,7 @@ Rules:
 2. NEVER mention or print any warning phrases about seed phrases or private keys unless explicitly asked about security. Keep responses clean.
 """
 
-# 4. Helper function to generate automated structured response
+# Helper function to generate automated structured response
 async def get_structured_price_card(ticker_input: str):
     ticker = ticker_input.lower().strip()
     coin_id = TICKER_MAP.get(ticker)
@@ -63,7 +65,6 @@ async def get_structured_price_card(ticker_input: str):
                         change_24h = data[coin_id].get("usd_24h_change", 0)
                         emoji = "📈" if change_24h >= 0 else "📉"
                         
-                        # Structured conversion data
                         card = (
                             f"📊 **LIVE MARKET INTELLIGENCE**\n"
                             f"-------------------------------------\n"
@@ -86,6 +87,35 @@ async def get_structured_price_card(ticker_input: str):
 
 
 # 3. Web3 Feature Command Handlers
+
+@dp.message(Command("pm"))
+async def handle_private_message_command(message: types.Message):
+    """Usage: /pm @username Your secret message here"""
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.reply("Usage format: `/pm @username Your message text`")
+        return
+
+    # Strip out punctuation like commas from the username arg
+    target_username = args[1].lower().replace(",", "").strip()
+    text_to_send = args[2]
+
+    target_chat_id = user_registry.get(target_username)
+
+    if not target_chat_id:
+        await message.reply(
+            f"Cannot send message to {args[1]}.\n\n"
+            f"The user must open a private chat and click /start with me first so I can capture their ID!"
+        )
+        return
+
+    try:
+        await bot.send_message(chat_id=target_chat_id, text=f"{text_to_send}\n\n[Direct Admin PM]")
+        await message.reply(f"Successfully sent private message to {args[1]}!")
+    except Exception as e:
+        logging.error(f"Failed to send DM: {e}")
+        await message.reply("Failed to DM user. They might have blocked the bot or cleared the chat history.")
+
 @dp.message(Command("p"))
 async def handle_price_command(message: types.Message):
     args = message.text.split()
@@ -184,12 +214,16 @@ async def handle_gas_command(message: types.Message):
 
 @dp.message(CommandStart())
 async def handle_start_command(message: types.Message):
+    if message.from_user.username:
+        user_registry[f"@{message.from_user.username.lower()}"] = message.from_user.id
+
     welcome_text = (
         "Welcome to Web3 Brain AI!\n\n"
         "⚡ **Available Command Tools:**\n"
         "• `/p <ticker>` - Check live prices\n"
         "• `/calc <amount> <ticker>` - Convert crypto directly to USDT\n"
-        "• `/gas` - Check multi-chain gas specs\n\n"
+        "• `/gas` - Check multi-chain gas specs\n"
+        "• `/pm @username <text>` - Send a direct private message\n\n"
         "Or just ask: *'what is btc price?'*"
     )
     await message.reply(welcome_text, parse_mode="Markdown")
@@ -200,6 +234,10 @@ async def handle_incoming_messages(message: types.Message):
     if not message.text:
         return
 
+    # Track username mappings dynamically as people talk in the group chat
+    if message.from_user.username:
+        user_registry[f"@{message.from_user.username.lower()}"] = message.from_user.id
+
     bot_info = await bot.get_me()
     bot_username = f"@{bot_info.username}"
     
@@ -207,23 +245,22 @@ async def handle_incoming_messages(message: types.Message):
     is_tagged = bot_username in message.text
     is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
 
+    # Strictly process if it's a private chat, tagged, or replied to
     if is_private or is_tagged or is_reply_to_bot:
-        # Conversational Scan Strategy: Check if they are asking about price parameters naturally
         text_clean = message.text.replace(bot_username, "").lower().strip()
         
-        # Look for keywords like "price", "how much", "rate" anywhere in the phrase
+        # Look for natural pricing keywords
         if any(keyword in text_clean for keyword in ["price", "how much", "rate", "cost"]):
-            # Scan text to isolate the ticker token
             for word in text_clean.split():
-                clean_word = re.sub(r'[^\w]', '', word) # Strip punctuation marks
+                clean_word = re.sub(r'[^\w]', '', word)
                 if clean_word in TICKER_MAP:
                     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
                     structured_card = await get_structured_price_card(clean_word)
                     if structured_card:
                         await message.reply(structured_card, parse_mode="Markdown")
-                        return # Break cycle immediately so the AI handler doesn't double-reply
+                        return
 
-        # Fallback to AI Brain if it's general chat or unrelated yapping
+        # AI Fallback Brain Execution
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
         clean_prompt = message.text.replace(bot_username, "").strip()
         
@@ -238,8 +275,7 @@ async def handle_incoming_messages(message: types.Message):
             )
             reply_text = response.choices[0].message.content
             if reply_text:
-                reply_text = reply_text.strip()
-                await message.reply(reply_text, parse_mode=None)
+                await message.reply(reply_text.strip(), parse_mode=None)
         except Exception as e:
             logging.error(f"Groq API Error: {e}")
             await message.reply("Sorry, I encountered a network error. Please try again!")
@@ -260,7 +296,7 @@ async def start_web_server():
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    logging.info("Polling Engine Live with Automated Chat Analytics!")
+    logging.info("Polling Engine Live with Restructured Handlers!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
