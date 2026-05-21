@@ -87,38 +87,46 @@ async def handle_whale_command(message: types.Message):
     log_user_activity(message.from_user)
     await message.reply("📡 Tracking live whale ledger systems...", parse_mode="Markdown")
 
-# Global Text Handler: Updated for Bulletproof Group Tag Processing
+# Global Text Fallback (Tracks Live Messages + Tags Rewards + Stats Command)
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
-    # Safe check for text content so media/system messages don't break execution flow
     if not message.text: 
         return
         
     log_user_activity(message.from_user)
 
+    # Clean text to process triggers smoothly
+    raw_text = message.text.strip().upper()
+    is_private = message.chat.type == "private"
+
+    # --- NEW FEATURE: TRIGGER FOR "CHECK XRP" OR "CHECK XP" ---
+    if "CHECK XRP" in raw_text or "CHECK XP" in raw_text:
+        if not xp_database:
+            await message.reply("📉 Database empty! No users have earned any points yet.")
+            return
+
+        # Sort all registered database users by their total XP holdings
+        sorted_users = sorted(xp_database.values(), key=lambda x: x["xp"], reverse=True)
+        
+        stats_output = "📊 **KING LEO ECOSYSTEM REAL-TIME LEDGER** 📊\n\n"
+        for index, user in enumerate(sorted_users, start=1):
+            stats_output += f"🏅 #{index} | **{user['username']}** — `{user['xp']} XP` ({user['messages']} msgs)\n"
+        
+        # Blast the full list right into the group or private chat
+        await message.reply(stats_output, parse_mode="Markdown")
+        return
+
+    # --- STANDALONE GROUP CHAT MENTION TAG DETECTION ---
     bot_info = await bot.get_me()
     bot_username = f"@{bot_info.username}"
-    
-    # Case-insensitive checks to handle typing variations smoothly in group environments
     is_tagged = bot_username.lower() in message.text.lower()
 
-    if is_tagged:
+    if is_tagged and not is_private:
         user_id = get_or_create_user(message.from_user)
         username_label = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
         secret_xp = random.randint(1, 50)
         xp_database[user_id]["xp"] += secret_xp
-        
-        # Setup the 3D Mini App WebApp Button
-        app_url = WEB_APP_URL if WEB_APP_URL else f"https://google.com"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💎 ENTER 3D LEO REALM 💎", web_app=WebAppInfo(url=app_url))]
-        ])
-        
-        # Reply directly inside the group chat context
-        await message.reply(
-            f'🎉 🔥 BOOM! "{username_label}" just gained {secret_xp} XP for tagging the AI!',
-            reply_markup=kb
-        )
+        await message.reply(f'🎉 🔥 BOOM! "{username_label}" just gained {secret_xp} XP for tagging the AI!')
 
 # 4. API Endpoints
 async def api_leaderboard_data(request):
