@@ -37,59 +37,74 @@ DASHBOARD_HTML = """
     <title>King Leo Premium Hub</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: sans-serif; background: radial-gradient(circle at top, #141a29 0%, #080b11 100%); color: #ffffff; padding: 20px; text-align: center; }
-        .profile-capsule { background: rgba(0, 255, 204, 0.1); border: 1px solid #00ffcc; border-radius: 20px; padding: 20px; margin-bottom: 25px; }
-        .xp-display { font-size: 32px; color: #00ffcc; font-weight: 900; }
-        .calendar-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; background: rgba(22, 31, 44, 0.6); padding: 15px; border-radius: 16px; }
-        .calendar-day { background: #0d121c; padding: 15px; border-radius: 10px; border: 1px solid #202b3d; cursor: pointer; }
-        .calendar-day.claimed { background: #00ffcc; color: #000; font-weight: 900; }
-        .sync-action-btn { background: linear-gradient(90deg, #ff007f, #7f00ff); color: white; padding: 15px; width: 100%; border: none; border-radius: 14px; margin-top: 25px; font-weight: 800; }
+        body { font-family: sans-serif; background: #080b11; color: #ffffff; padding: 20px; text-align: center; }
+        .xp-display { font-size: 32px; color: #00ffcc; font-weight: 900; margin: 20px 0; }
+        .sync-action-btn { background: #ff007f; color: white; padding: 15px; width: 100%; border: none; border-radius: 14px; margin-top: 25px; }
     </style>
 </head>
 <body>
-    <div class="profile-capsule">
-        <h2 id="user-display">🔥 LEO COIN HUB 🔥</h2>
-        <div class="xp-display" id="user-total-xp">0000</div>
-    </div>
-    <div class="calendar-grid" id="calendar-box"></div>
+    <h2>🔥 KING LEO XP STATS 🔥</h2>
+    <div class="xp-display" id="user-total-xp">Loading...</div>
     <button class="sync-action-btn" onclick="window.location.reload()">🔄 REFRESH STATS</button>
     <script>
         const tg = window.Telegram.WebApp; tg.expand();
-        // Add sync logic here
+        fetch('/api/userstatus?user_id=' + tg.initDataUnsafe.user.id)
+            .then(r => r.json()).then(d => document.getElementById('user-total-xp').innerText = d.xp + ' XP');
     </script>
 </body>
 </html>
 """
 
 # 3. Handlers
+def log_user_activity(user: types.User):
+    user_id = str(user.id)
+    if user_id not in xp_database:
+        xp_database[user_id] = {"username": user.username or user.first_name, "xp": 10}
+    xp_database[user_id]["xp"] += 1
+
 @dp.message(CommandStart())
 async def handle_start_command(message: types.Message):
+    log_user_activity(message.from_user)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⚡ LAUNCH KING LEO HUB ⚡", web_app=WebAppInfo(url=WEB_APP_URL))]])
-    await message.reply("🔥 **WELCOME TO THE KING LEO ECOSYSTEM** 🔥\n\nTap below to open your custom Web3 Dashboard!", reply_markup=kb)
+    await message.reply("🔥 **WELCOME TO THE KING LEO ECOSYSTEM** 🔥\n\nTap below to open your Dashboard.", reply_markup=kb)
 
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     if not message.text: return
-    # Block other commands in groups
-    if message.chat.type != "private" and message.text.startswith("/") and not message.text.startswith("/start"):
+    
+    # GROUP GATEKEEPER: Ignore all commands except /start
+    if message.chat.type != "private" and message.text.startswith("/"):
         return
-        
-    try:
-        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-        completion = groq_client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[{"role": "user", "content": message.text}],
-            temperature=0.7
-        )
-        await message.reply(completion.choices[0].message.content)
-    except Exception: pass
+
+    # PRIVATE DM FUNCTION: Redirect to Stats only
+    if message.chat.type == "private":
+        log_user_activity(message.from_user)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 CHECK YOUR XP STATUS", web_app=WebAppInfo(url=WEB_APP_URL))]])
+        await message.reply("🚀 **KING LEO PORTAL**\n\nUse the button below to check your current XP.", reply_markup=kb)
+        return
+
+    # General AI Engine active only if tagged in groups
+    bot_info = await bot.get_me()
+    if f"@{bot_info.username}" in message.text:
+        try:
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": message.text}],
+                temperature=0.7
+            )
+            await message.reply(completion.choices[0].message.content)
+        except Exception: pass
 
 # 4. Web Server
 async def frontend_mini_app_dashboard(request): return web.Response(text=DASHBOARD_HTML, content_type="text/html")
+async def api_user_status(request): 
+    uid = request.query.get("user_id")
+    return web.json_response(xp_database.get(uid, {"xp": 0}))
 
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", frontend_mini_app_dashboard)
+    app.router.add_get("/api/userstatus", api_user_status)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 10000))).start()
