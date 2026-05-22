@@ -1,196 +1,289 @@
 import asyncio
-from aiohttp import web
 import datetime
+import random
+from aiohttp import web
 
-# =====================
-# LIGHTWEIGHT MEMORY DB
-# =====================
+# =========================
+# MEMORY DATABASE
+# =========================
 users = {}
 
+BOT_USERNAME = "@PD_CARD"
+
+MESSAGE_COOLDOWN = 20  # anti spam
+TAG_COOLDOWN = 86400   # 24h
+
+# =========================
+# USER INIT
+# =========================
 def get_user(uid, name="Guest"):
     if uid not in users:
         users[uid] = {
             "name": name,
             "xp": 0,
-            "last_checkin": ""
+            "last_msg": None,
+            "last_tag": ""
         }
     return users[uid]
 
-
-# =====================
-# API ROUTES
-# =====================
-
-async def get_profile(request):
-    uid = request.query.get("user_id", "0")
+# =========================
+# API: PROFILE
+# =========================
+async def profile(request):
+    uid = request.query.get("user_id")
     name = request.query.get("name", "Guest")
-
     return web.json_response(get_user(uid, name))
 
-
-async def get_leaderboard(request):
+# =========================
+# API: LEADERBOARD
+# =========================
+async def leaderboard(request):
     data = sorted(users.items(), key=lambda x: x[1]["xp"], reverse=True)
 
     return web.json_response({
-        "leaderboard": [
-            {
-                "name": u[1]["name"],
-                "xp": u[1]["xp"]
-            }
-            for u in data
+        "data": [
+            {"name": v["name"], "xp": v["xp"]}
+            for _, v in data
         ]
     })
 
+# =========================
+# API: CHECK XP (SIMPLIFIED BOT COMMAND STYLE)
+# =========================
+async def check_xp(request):
+    data = sorted(users.values(), key=lambda x: x["xp"], reverse=True)
 
-async def checkin(request):
+    msg = []
+    for i, u in enumerate(data, 1):
+        msg.append(f"{i}. {u['name']} - {u['xp']} XP")
+
+    return web.json_response({"msg": "\n".join(msg)})
+
+# =========================
+# API: GROUP MESSAGE XP + TAG SYSTEM
+# =========================
+async def event(request):
     data = await request.json()
-    uid = data.get("user_id")
-    day = data.get("day")
 
-    user = get_user(uid)
+    uid = data["user_id"]
+    name = data.get("name", "User")
+    text = data.get("text", "").upper()
+    is_group = data.get("group", True)
 
-    today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    user = get_user(uid, name)
+    now = datetime.datetime.utcnow()
 
-    if user["last_checkin"] == today:
+    # =========================
+    # 1. GROUP MESSAGE XP
+    # =========================
+    if is_group:
+        if user["last_msg"]:
+            diff = (now - user["last_msg"]).total_seconds()
+            if diff < MESSAGE_COOLDOWN:
+                pass
+            else:
+                user["xp"] += 5
+                user["last_msg"] = now
+        else:
+            user["xp"] += 5
+            user["last_msg"] = now
+
+    # =========================
+    # 2. BOT TAG REWARD
+    # =========================
+    if BOT_USERNAME in text:
+
+        today = now.strftime("%Y-%m-%d")
+
+        if user["last_tag"] == today:
+            return web.json_response({
+                "msg": "🐼 Reward already claimed today"
+            })
+
+        reward = random.randint(20, 50)
+        user["xp"] += reward
+        user["last_tag"] = today
+
         return web.json_response({
-            "success": False,
-            "msg": "Already claimed today"
+            "msg": f"🎉 +{reward} XP Panda Bonus!"
         })
 
-    user["xp"] += 10
-    user["last_checkin"] = today
+    return web.json_response({"ok": True})
 
-    return web.json_response({
-        "success": True,
-        "xp": user["xp"]
-    })
-
-
-# =====================
-# FRONTEND (MINI APP UI)
-# =====================
-
+# =========================
+# FRONTEND MINI APP
+# =========================
 async def index(request):
 
     html = """
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>PD CARD</title>
 
 <style>
 body{
-    margin:0;
-    font-family:Arial;
-    background:#0b0b0f;
-    color:white;
-    padding:15px;
+margin:0;
+font-family:Arial;
+background: radial-gradient(circle,#0f0f1a,#050509);
+color:white;
 }
 
+/* ===== GLASS UI ===== */
 .card{
-    background:#1a1a22;
-    padding:15px;
-    border-radius:12px;
-    margin-bottom:15px;
+background: rgba(255,255,255,0.05);
+backdrop-filter: blur(12px);
+border:1px solid rgba(255,255,255,0.08);
+border-radius:16px;
+padding:15px;
+margin:10px;
+box-shadow:0 10px 30px rgba(0,0,0,0.5);
 }
 
-h2,h3{
-    margin:5px 0;
+/* ===== XP ===== */
+#xp{
+font-size:22px;
+font-weight:800;
+color:#a855f7;
+text-shadow:0 0 10px #a855f7;
 }
 
-button{
-    padding:10px;
-    border:none;
-    border-radius:8px;
-    background:#a855f7;
-    color:white;
-    cursor:pointer;
+/* ===== NAV ===== */
+.nav{
+position:fixed;
+bottom:0;
+width:100%;
+display:flex;
+background:#0a0a10;
+border-top:1px solid #222;
 }
 
-button:hover{
-    opacity:0.8;
+.nav button{
+flex:1;
+padding:12px;
+background:none;
+border:none;
+color:white;
 }
 
-#lb div{
-    padding:5px 0;
-    border-bottom:1px solid #333;
+/* ===== PAGE ===== */
+.page{display:none;padding:10px;}
+.active{display:block;}
+
+/* ===== USER LIST ===== */
+.user{
+padding:10px;
+border-bottom:1px solid #222;
+animation:fade .3s ease;
+}
+
+@keyframes fade{
+from{opacity:0;transform:translateY(10px)}
+to{opacity:1;transform:translateY(0)}
+}
+
+/* ===== SLIDER ===== */
+#slide{
+height:220px;
+border-radius:12px;
+background:url('/panda-pack.png');
+background-size:300% 1000%;
+transition:0.6s ease;
 }
 </style>
 </head>
 
 <body>
 
+<!-- HOME -->
+<div id="home" class="page active">
+
 <div class="card">
-    <h2>🐼 PD CARD</h2>
-    <div id="xp">Loading...</div>
+<h2>🐼 PD CARD</h2>
+<div id="xp">XP: 0</div>
 </div>
 
 <div class="card">
-    <h3>💱 Market Rates</h3>
-    <p>Apple $100 → ₦145,000</p>
-    <p>Steam $50 → ₦72,000</p>
-    <p>Amazon $20 → ₦29,500</p>
+<h3>🎁 30-Day Panda Rewards</h3>
+<div id="slide"></div>
+<div id="text"></div>
 </div>
 
-<div class="card">
-    <h3>🏆 Leaderboard</h3>
-    <div id="lb">Loading...</div>
 </div>
 
+<!-- TASKS -->
+<div id="tasks" class="page">
 <div class="card">
-    <h3>🎁 Daily Reward</h3>
-    <button onclick="checkin()">Claim +10 XP</button>
+<h3>📌 Tasks</h3>
+<p>Send Messages +5 XP</p>
+<p>Daily Check-in +20 XP</p>
+<p>Tag PD CARD +30 XP</p>
+</div>
+</div>
+
+<!-- USERS -->
+<div id="users" class="page">
+<div class="card">
+<h3>🏆 Leaderboard</h3>
+<div id="lb"></div>
+</div>
+</div>
+
+<!-- NAV -->
+<div class="nav">
+<button onclick="show('home')">Home</button>
+<button onclick="show('tasks')">Tasks</button>
+<button onclick="show('users')">Users</button>
 </div>
 
 <script>
-const tg = window.Telegram?.WebApp;
-tg?.expand();
+const user = {id:"1",name:"Guest"};
 
-const user = tg?.initDataUnsafe?.user || {
-    id: "1",
-    first_name: "Guest"
-};
+function show(p){
+document.querySelectorAll('.page')
+.forEach(x=>x.classList.remove('active'));
+document.getElementById(p).classList.add('active');
+}
 
+/* ===== LOAD DATA ===== */
 async function load(){
 
-    // PROFILE
-    let res = await fetch(
-        `/profile?user_id=${user.id}&name=${user.first_name}`
-    );
+let p = await fetch(`/profile?user_id=${user.id}&name=${user.name}`);
+p = await p.json();
+xp.innerText = "XP: " + p.xp;
 
-    let data = await res.json();
+/* leaderboard */
+let l = await fetch("/leaderboard");
+l = await l.json();
 
-    document.getElementById("xp").innerText =
-        "XP: " + data.xp;
-
-    // LEADERBOARD
-    let lb = await fetch("/leaderboard");
-    lb = await lb.json();
-
-    document.getElementById("lb").innerHTML =
-        lb.leaderboard
-        .map((u,i)=>
-            `#${i+1} ${u.name} - ${u.xp} XP`
-        ).join("<br>");
+lb.innerHTML = l.data.map((u,i)=>
+`<div class="user">#${i+1} ${u.name} - ${u.xp}</div>`
+).join("")
 }
 
-async function checkin(){
+setInterval(load,3000);
 
-    await fetch("/checkin", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({
-            user_id: user.id,
-            day: 1
-        })
-    });
+/* ===== 30 DAY PANDA SLIDES ===== */
+const slides = Array.from({length:30},(_,i)=>({
+x:(i%6)*20,
+y:Math.floor(i/6)*25,
+text:`Day ${i+1} +${10+i} XP`
+}));
 
-    load();
+let i=0;
+
+function run(){
+let s = slides[i];
+slide.style.backgroundPosition = `${s.x}% ${s.y}%`;
+text.innerText = s.text;
+i=(i+1)%slides.length;
 }
 
-load();
+setInterval(run,2500);
+setInterval(load,3000);
+
+run();load();
 </script>
 
 </body>
@@ -199,17 +292,16 @@ load();
 
     return web.Response(text=html, content_type="text/html")
 
-
-# =====================
+# =========================
 # APP SETUP
-# =====================
-
+# =========================
 app = web.Application()
 
 app.router.add_get("/", index)
-app.router.add_get("/profile", get_profile)
-app.router.add_get("/leaderboard", get_leaderboard)
-app.router.add_post("/checkin", checkin)
+app.router.add_get("/profile", profile)
+app.router.add_get("/leaderboard", leaderboard)
+app.router.add_post("/event", event)
+app.router.add_get("/checkxp", check_xp)
 
 if __name__ == "__main__":
     web.run_app(app, port=10000)
