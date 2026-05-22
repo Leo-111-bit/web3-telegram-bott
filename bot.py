@@ -1,624 +1,416 @@
 import os
-import sys
-import logging
 import asyncio
-import random
+import logging
 import datetime
+import sqlite3
+import random
+import math
+
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from aiogram.enums import ChatType
 
 # =========================
 # CONFIG
 # =========================
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-WEB_APP_URL = os.environ.get("WEB_APP_URL", "")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEBAPP_URL = os.getenv("WEB_APP_URL", "http://localhost:10000")
 
-logging.basicConfig(
-    level=logging.INFO,
-    stream=sys.stdout,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+if not TOKEN:
+    raise Exception("Missing TELEGRAM_BOT_TOKEN")
 
-if not TELEGRAM_BOT_TOKEN:
-    logging.error("Missing TELEGRAM_BOT_TOKEN")
-    sys.exit(1)
-
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+bot = Bot(TOKEN)
 dp = Dispatcher()
 
-BOT_USERNAME = None
-
-db_lock = asyncio.Lock()
-
-MESSAGE_XP_COOLDOWN = 30
-TAG_REWARD_COOLDOWN = 86400
-
-user_registry = {}
-xp_database = {}
+logging.basicConfig(level=logging.INFO)
 
 # =========================
-# USER MANAGEMENT
+# DATABASE
 # =========================
 
-def utc_now():
-    return datetime.datetime.now(datetime.timezone.utc)
+DB_NAME = "pdcard.db"
 
-def create_timestamp():
-    return utc_now().isoformat()
+def db():
+    return sqlite3.connect(DB_NAME, check_same_thread=False)
 
-def get_or_create_user(user: types.User):
+def init_db():
+    conn = db()
+    cur = conn.cursor()
 
-    user_id = str(user.id)
-
-    username = (
-        f"@{user.username}"
-        if user.username
-        else user.first_name
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        username TEXT,
+        xp INTEGER DEFAULT 0,
+        messages INTEGER DEFAULT 0,
+        streak INTEGER DEFAULT 0,
+        last_xp_message TEXT,
+        last_tag_claim TEXT
     )
+    """)
 
-    if user.username:
-        user_registry[
-            f"@{user.username.lower()}"
-        ] = user.id
+    conn.commit()
+    conn.close()
 
-    if user_id not in xp_database:
+init_db()
 
-        xp_database[user_id] = {
+# =========================
+# TIME HELPERS
+# =========================
 
-            "username": username,
-            "messages": 0,
-            "xp": 0,
+def now():
+    return datetime.datetime.utcnow()
 
-            "last_active": "",
+def iso():
+    return now().isoformat()
 
-            "last_checkin": "",
+def can_use(last_time, cooldown):
+    if not last_time:
+        return True
+    last = datetime.datetime.fromisoformat(last_time)
+    return (now() - last).total_seconds() > cooldown
 
-            "last_tag_claim": "",
+# =========================
+# XP SYSTEM
+# =========================
 
-            "last_message_reward": "",
+XP_COOLDOWN = 30
+TAG_COOLDOWN = 86400
 
-            "checkin_days": []
+def get_level(xp):
+    return int(math.sqrt(xp / 120)) + 1
 
-        }
+def xp_to_next(level):
+    return (level * level) * 120
 
-    return user_id
+def rank_title(level):
+    if level < 3:
+        return "🐣 Rookie Panda"
+    elif level < 6:
+        return "🐼 Active Panda"
+    elif level < 10:
+        return "🔥 Elite Panda"
+    elif level < 15:
+        return "💎 Diamond Panda"
+    else:
+        return "👑 Mythic Panda"
 
+def message_xp():
+    return random.randint(8, 15)
 
-async def log_user_activity(user: types.User):
+def streak_multiplier(streak):
+    return min(1 + (streak * 0.1), 2.5)
 
-    if user.is_bot:
-        return
+# =========================
+# USER SYSTEM
+# =========================
 
-    async with db_lock:
+def get_user(uid, username="Guest"):
+    conn = db()
+    cur = conn.cursor()
 
-        user_id = get_or_create_user(user)
+    cur.execute("SELECT * FROM users WHERE user_id=?", (uid,))
+    row = cur.fetchone()
 
-        profile = xp_database[user_id]
-
-        now = utc_now()
-
-        profile["messages"] += 1
-        profile["last_active"] = create_timestamp()
-
-        last_reward = profile.get(
-            "last_message_reward"
+    if not row:
+        cur.execute(
+            "INSERT INTO users (user_id, username) VALUES (?,?)",
+            (uid, username)
         )
+        conn.commit()
+        conn.close()
+        return get_user(uid, username)
 
-        if last_reward:
+    conn.close()
+    return row
 
-            diff = (
-                now -
-                datetime.datetime.fromisoformat(
-                    last_reward
-                )
-            ).total_seconds()
-
-            if diff < MESSAGE_XP_COOLDOWN:
-                return
-
-        profile["xp"] += 15
-
-        profile[
-            "last_message_reward"
-        ] = create_timestamp()
-
+def update(uid, field, value):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, uid))
+    conn.commit()
+    conn.close()
 
 # =========================
-# COMMANDS
+# TELEGRAM HANDLERS
 # =========================
 
-@dp.message(
-    CommandStart(),
-    F.chat.type == ChatType.PRIVATE
-)
-async def start_private(
-        message: types.Message
-):
+@dp.message(CommandStart())
+async def start(msg: types.Message):
 
-    await log_user_activity(
-        message.from_user
-    )
+    get_user(str(msg.from_user.id), msg.from_user.username or "User")
 
-    app_url = WEB_APP_URL or "https://google.com"
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-
-            [
-                InlineKeyboardButton(
-                    text="🐼 WELCOME TO PD CARD 🐼",
-                    web_app=WebAppInfo(
-                        url=app_url
-                    )
-                )
-            ]
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            types.InlineKeyboardButton(
+                text="🐼 OPEN PD CARD",
+                web_app=types.WebAppInfo(url=WEBAPP_URL)
+            )
         ]
-    )
+    ])
 
-    text = (
-        "🐼 *WELCOME TO PD CARD*\n\n"
-        "Tap below to access your dashboard."
-    )
-
-    await message.answer(
-        text,
-        parse_mode="Markdown",
+    await msg.answer(
+        "🐼 Welcome to PD CARD\nOpen your dashboard below",
         reply_markup=kb
     )
 
+@dp.message(Command("leaderboard"))
+async def leaderboard(msg: types.Message):
 
-@dp.message(
-    Command("whale")
-)
-async def whale(
-        message: types.Message
-):
+    conn = db()
+    cur = conn.cursor()
 
-    await log_user_activity(
-        message.from_user
-    )
+    cur.execute("SELECT username, xp FROM users ORDER BY xp DESC LIMIT 10")
+    rows = cur.fetchall()
+    conn.close()
 
-    await message.answer(
-        "📡 Tracking allocation ledgers..."
-    )
+    text = "🏆 PD LEADERBOARD\n\n"
 
+    for i, r in enumerate(rows, 1):
+        text += f"{i}. {r[0]} — {r[1]} XP\n"
+
+    await msg.answer(text)
 
 # =========================
-# MESSAGE HANDLER
+# MAIN XP + DAILY SYSTEM
 # =========================
 
 @dp.message()
-async def incoming(
-        message: types.Message
-):
+async def xp_handler(msg: types.Message):
 
-    if not message.text:
+    if not msg.text:
         return
 
-    await log_user_activity(
-        message.from_user
-    )
+    uid = str(msg.from_user.id)
+    username = msg.from_user.username or "User"
 
-    raw = (
-        message.text
-        .strip()
-        .upper()
-    )
+    row = get_user(uid, username)
 
-    # leaderboard
+    xp = row[2]
+    messages = row[3]
+    streak = row[4]
+    last_xp_message = row[5]
+    last_tag_claim = row[6]
 
-    if (
-        "CHECK XP" in raw
-        or
-        "CHECK XRP" in raw
-    ):
+    messages += 1
 
-        if not xp_database:
+    # =========================
+    # MESSAGE XP SYSTEM
+    # =========================
+    if can_use(last_xp_message, XP_COOLDOWN):
+        xp += message_xp()
+        update(uid, "last_xp_message", iso())
 
-            return await message.reply(
-                "No active users"
+    # =========================
+    # STREAK SYSTEM
+    # =========================
+    today = datetime.datetime.utcnow().date()
+
+    if last_xp_message:
+        last_date = datetime.datetime.fromisoformat(last_xp_message).date()
+
+        if (today - last_date).days == 1:
+            streak += 1
+        elif (today - last_date).days > 1:
+            streak = 1
+    else:
+        streak = 1
+
+    update(uid, "xp", xp)
+    update(uid, "messages", messages)
+    update(uid, "streak", streak)
+
+    raw = msg.text.upper()
+
+    # =========================
+    # CHECK XP / CHECK XRP + DAILY TAG REWARD
+    # =========================
+    if "CHECK XP" in raw or "CHECK XRP" in raw:
+
+        if not can_use(last_tag_claim, TAG_COOLDOWN):
+
+            await msg.reply(
+                "🐼 already claimed\ncome again tomorrow"
             )
-
-        users = sorted(
-            xp_database.values(),
-            key=lambda x:x["xp"],
-            reverse=True
-        )
-
-        out = (
-            "📊 *PD LEADERBOARD*\n\n"
-        )
-
-        for i,u in enumerate(
-                users,
-                start=1
-        ):
-
-            out += (
-                f"🏅 #{i} "
-                f"*{u['username']}* "
-                f"- {u['xp']} XP "
-                f"({u['messages']} msgs)\n"
-            )
-
-        return await message.answer(
-            out,
-            parse_mode="Markdown"
-        )
-
-    # mention reward
-
-    if (
-        message.chat.type
-        != ChatType.PRIVATE
-        and BOT_USERNAME
-        and BOT_USERNAME.lower()
-        in message.text.lower()
-    ):
-
-        now = utc_now()
-
-        if (
-            now-message.date
-        ).total_seconds() > 86400:
-
             return
 
-        async with db_lock:
+        reward = random.randint(20, 60)
+        xp += reward
 
-            uid = get_or_create_user(
-                message.from_user
-            )
+        update(uid, "xp", xp)
+        update(uid, "last_tag_claim", iso())
 
-            profile = xp_database[
-                uid
-            ]
+        lvl = get_level(xp)
+        title = rank_title(lvl)
 
-            last_claim = profile.get(
-                "last_tag_claim"
-            )
+        await msg.reply(
+            f"""🎉 DAILY XP CLAIMED
 
-            if last_claim:
++{reward} XP
+💎 XP: {xp}
+📈 Level: {lvl}
+🏷 Rank: {title}
+🔥 Streak: {streak}
 
-                diff = (
-                    now -
-                    datetime.datetime
-                    .fromisoformat(
-                        last_claim
-                    )
-                ).total_seconds()
-
-                if diff < TAG_REWARD_COOLDOWN:
-
-                    return await message.reply(
-                        "🐼 Daily mention reward already claimed."
-                    )
-
-            reward = random.randint(
-                20,
-                50
-            )
-
-            profile["xp"] += reward
-
-            profile[
-                "last_tag_claim"
-            ] = create_timestamp()
-
-        return await message.reply(
-
-            f"🎉 Bonus unlocked: "
-            f"+{reward} XP"
-
+come back tomorrow 🐼
+"""
         )
-
+        return
 
 # =========================
-# APIs
+# WEB API: USER
 # =========================
 
-async def leaderboard_api(
-        request
-):
+async def api_user(request):
 
-    users = sorted(
-
-        xp_database.values(),
-
-        key=lambda x:x["xp"],
-
-        reverse=True
-
-    )
-
-    return web.json_response(
-        {
-            "leaderboard":users
-        }
-    )
-
-
-async def user_api(
-        request
-):
-
-    uid = request.query.get(
-        "user_id"
-    )
-
-    username = request.query.get(
-        "username",
-        "Guest"
-    )
+    uid = request.query.get("user_id")
+    username = request.query.get("username", "Guest")
 
     if not uid:
+        return web.json_response({"error": "missing user"}, status=400)
 
-        return web.json_response(
-            {
-                "error":"missing user id"
-            },
-            status=400
-        )
+    row = get_user(uid, username)
 
-    async with db_lock:
-
-        if uid not in xp_database:
-
-            xp_database[uid]={
-
-                "username":username,
-
-                "messages":0,
-
-                "xp":0,
-
-                "last_active":"",
-
-                "last_checkin":"",
-
-                "last_tag_claim":"",
-
-                "last_message_reward":"",
-
-                "checkin_days":[]
-
-            }
-
-    return web.json_response(
-        xp_database[uid]
-    )
-
-
-async def checkin_api(
-        request
-):
-
-    try:
-
-        data=await request.json()
-
-        uid=data.get(
-            "user_id"
-        )
-
-        day=int(
-            data.get(
-                "day"
-            )
-        )
-
-    except:
-
-        return web.json_response(
-
-            {
-
-                "success":False,
-
-                "message":"Bad request"
-
-            },
-
-            status=400
-
-        )
-
-    async with db_lock:
-
-        profile = xp_database.get(
-            uid
-        )
-
-        if not profile:
-
-            return web.json_response(
-                {
-                    "success":False,
-                    "message":"User not found"
-                }
-            )
-
-        if day <1 or day>24:
-
-            return web.json_response(
-                {
-                    "success":False,
-                    "message":"Invalid day"
-                }
-            )
-
-        today=utc_now().date()
-
-        if profile["last_checkin"]:
-
-            last=datetime.datetime.fromisoformat(
-
-                profile[
-                    "last_checkin"
-                ]
-
-            ).date()
-
-            if last==today:
-
-                return web.json_response(
-
-                    {
-
-                        "success":False,
-
-                        "message":"Already checked in today"
-
-                    }
-
-                )
-
-        profile["xp"]+=10
-
-        profile[
-            "last_checkin"
-        ]=create_timestamp()
-
-        if day not in profile[
-            "checkin_days"
-        ]:
-
-            profile[
-                "checkin_days"
-            ].append(day)
-
-    return web.json_response(
-
-        {
-
-            "success":True,
-
-            "message":
-            f"Day {day} redeemed +10 XP"
-
-        }
-
-    )
-
+    return web.json_response({
+        "user_id": row[0],
+        "username": row[1],
+        "xp": row[2],
+        "messages": row[3],
+        "level": get_level(row[2]),
+        "streak": row[4]
+    })
 
 # =========================
-# MINI APP PAGE
+# WEB API: LEADERBOARD
 # =========================
 
-async def dashboard(
-        request
-):
+async def api_leaderboard(request):
 
-    html="""
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT username, xp FROM users ORDER BY xp DESC")
+    rows = cur.fetchall()
+    conn.close()
+
+    return web.json_response({
+        "leaderboard": [
+            {"username": r[0], "xp": r[1]} for r in rows
+        ]
+    })
+
+# =========================
+# WEB DASHBOARD (PANDA SLIDESHOW)
+# =========================
+
+async def dashboard(request):
+
+    html = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>PD CARD</title>
+<title>🐼 PD CARD</title>
+
 <style>
 body{
-background:#111;
+margin:0;
+background:#0b0b12;
 color:white;
 font-family:Arial;
+}
+
+.header{
+text-align:center;
 padding:20px;
+font-size:22px;
+font-weight:bold;
+}
+
+.slider{
+display:flex;
+overflow-x:auto;
+gap:15px;
+padding:20px;
+scroll-snap-type:x mandatory;
 }
 
 .card{
-padding:20px;
+min-width:260px;
+height:330px;
+background:linear-gradient(145deg,#1a1a2e,#0f0f1a);
+border-radius:20px;
+padding:15px;
+scroll-snap-align:center;
+box-shadow:0 10px 30px rgba(0,0,0,0.5);
+}
+
+.card img{
+width:100%;
+height:200px;
 border-radius:15px;
-background:#222;
-margin-bottom:20px;
+object-fit:cover;
 }
 
 .row{
 display:flex;
 justify-content:space-between;
 padding:10px;
-background:#333;
-margin:5px;
-border-radius:8px;
+background:#1c1c2c;
+margin:8px;
+border-radius:10px;
 }
 </style>
+
 </head>
 
 <body>
 
-<div class="card">
+<div class="header">🐼 30-DAY PANDA JOURNEY</div>
 
-<h1>🐼 PD CARD</h1>
+<div class="slider" id="slider"></div>
 
-<div id="xp">Loading...</div>
-
-</div>
-
-<div id="leaderboard"></div>
+<div id="lb"></div>
 
 <script>
 
-async function load(){
+const pandas = Array.from({length:30}, (_,i)=>({
+day:i+1,
+img:`https://source.unsplash.com/300x300/?panda,${i}`
+}));
 
-const user=777
-
-let u=
-await fetch(
-`/api/userstatus?user_id=${user}`
-)
-
-u=await u.json()
-
-document.getElementById(
-"xp"
-).innerText=
-u.xp+" XP"
-
-let lb=
-await fetch(
-"/api/leaderboard"
-)
-
-lb=await lb.json()
-
-let html=""
-
-lb.leaderboard.forEach(
-(x,i)=>{
-
-const safe=
-document.createElement(
-"div"
-)
-
-safe.innerText=
-x.username
-
+function loadSlides(){
+let html="";
+pandas.forEach(p=>{
 html+=`
-<div class="row">
-
-<div>
-#${i+1}
-${safe.innerText}
-</div>
-
-<div>
-${x.xp}XP
-</div>
-
-</div>
-`
-
-})
-
-document
-.getElementById(
-"leaderboard"
-).innerHTML=html
-
+<div class="card">
+<h3>Day ${p.day}</h3>
+<img src="${p.img}" />
+</div>`;
+});
+document.getElementById("slider").innerHTML=html;
 }
 
-load()
+async function loadLB(){
+
+let res = await fetch("/api/leaderboard");
+let data = await res.json();
+
+let html="";
+
+data.leaderboard.forEach((u,i)=>{
+html+=`
+<div class="row">
+<div>#${i+1} ${u.username}</div>
+<div>${u.xp} XP</div>
+</div>`;
+});
+
+document.getElementById("lb").innerHTML=html;
+}
+
+loadSlides();
+loadLB();
 
 </script>
 
@@ -626,101 +418,35 @@ load()
 </html>
 """
 
-    return web.Response(
-        text=html,
-        content_type="text/html"
-    )
-
+    return web.Response(text=html, content_type="text/html")
 
 # =========================
-# SERVER
+# WEB SERVER
 # =========================
 
-async def start_server():
+async def start_web():
 
-    app=web.Application()
+    app = web.Application()
 
-    app.router.add_get(
-        "/",
-        dashboard
-    )
+    app.router.add_get("/", dashboard)
+    app.router.add_get("/api/user", api_user)
+    app.router.add_get("/api/leaderboard", api_leaderboard)
 
-    app.router.add_get(
-        "/api/leaderboard",
-        leaderboard_api
-    )
-
-    app.router.add_get(
-        "/api/userstatus",
-        user_api
-    )
-
-    app.router.add_post(
-        "/api/checkin",
-        checkin_api
-    )
-
-    runner=web.AppRunner(
-        app
-    )
-
+    runner = web.AppRunner(app)
     await runner.setup()
 
-    port=int(
-        os.environ.get(
-            "PORT",
-            10000
-        )
-    )
-
-    site=web.TCPSite(
-
-        runner,
-
-        "0.0.0.0",
-
-        port
-
-    )
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
 
     await site.start()
-
 
 # =========================
 # MAIN
 # =========================
 
 async def main():
+    await start_web()
+    await dp.start_polling(bot)
 
-    global BOT_USERNAME
-
-    me=await bot.get_me()
-
-    BOT_USERNAME=(
-        f"@{me.username}"
-    )
-
-    await bot.delete_webhook(
-        drop_pending_updates=True
-    )
-
-    await start_server()
-
-    logging.info(
-        "Server started"
-    )
-
-    try:
-
-        await dp.start_polling(
-            bot
-        )
-
-    finally:
-
-        await bot.session.close()
-
-
-if __name__=="__main__":
-
+if __name__ == "__main__":
     asyncio.run(main())
